@@ -26,7 +26,9 @@ use vulkano::OomError;
 use vulkano::buffer::{BufferSlice, BufferUsage, CpuAccessibleBuffer};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandAddError, CommandBufferBuilder,
                               CommandBufferBuilderError, DynamicState};
+use vulkano::command_buffer::cb::{AbstractStorageLayer, SubmitSyncLayer, UnsafeCommandBuffer};
 use vulkano::command_buffer::commands_raw::CmdCopyBufferToImageError;
+use vulkano::command_buffer::pool::StandardCommandPool;
 use vulkano::descriptor::descriptor_set::{DescriptorSet, SimpleDescriptorSetBuilder,
                                           SimpleDescriptorSetBufferExt,
                                           SimpleDescriptorSetImageExt};
@@ -154,10 +156,8 @@ impl Texture {
 
         let chunks = data.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]);
 
-        let buffer = CpuAccessibleBuffer::from_iter(device.clone(),
-                                                    BufferUsage::all(),
-                                                    family,
-                                                    chunks)
+        let buffer =
+            CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), family, chunks)
                 .expect("failed to create texture buffer");
 
         let set = {
@@ -175,13 +175,11 @@ impl Texture {
     }
 }
 
-type CustomFrameBuffer =
-    Framebuffer<Arc<RenderPass<CustomRenderPassDesc>>, ((), Arc<SwapchainImage>)>;
+type CustomFrameBuffer = Framebuffer<Arc<RenderPass<CustomRenderPassDesc>>,
+                                     ((), Arc<SwapchainImage>)>;
 
-type ImageCommandBuffer = vulkano::command_buffer::cb::SubmitSyncLayer<
-    vulkano::command_buffer::cb::AbstractStorageLayer<
-        vulkano::command_buffer::cb::UnsafeCommandBuffer<
-            Arc<vulkano::command_buffer::pool::StandardCommandPool>>>>;
+type ImageCommandBuffer =
+    SubmitSyncLayer<AbstractStorageLayer<UnsafeCommandBuffer<Arc<StandardCommandPool>>>>;
 
 type Pipeline = Arc<GraphicsPipeline<SingleBufferDefinition<vs::Vertex>,
                                      PipelineLayout<PipelineLayoutDescUnion<vs::Layout,
@@ -191,8 +189,7 @@ type Pipeline = Arc<GraphicsPipeline<SingleBufferDefinition<vs::Vertex>,
 pub struct Renderer {
     buffers: Buffers,
     device: Arc<Device>,
-    frame_buffers:
-        Vec<Arc<CustomFrameBuffer>>,
+    frame_buffers: Vec<Arc<CustomFrameBuffer>>,
     fs: Arc<fs::Shader>,
     pipeline: Pipeline,
     queue: Arc<Queue>,
@@ -332,7 +329,8 @@ impl Renderer {
 
             end = start + cmd.elem_count();
 
-            let texture = self.find_texture(cmd.texture().id().unwrap()).ok_or(Error::TextureNotFound)?;
+            let texture = self.find_texture(cmd.texture().id().unwrap())
+                .ok_or(Error::TextureNotFound)?;
 
             let &NkRect { x, y, w, h } = cmd.clip_rect();
 
@@ -362,7 +360,10 @@ impl Renderer {
         Ok(command_buffer)
     }
 
-    fn convert(&mut self, ctx: &mut NkContext, nk_cmd_buffer: &mut NkBuffer, config: &NkConvertConfig) {
+    fn convert(&mut self,
+               ctx: &mut NkContext,
+               nk_cmd_buffer: &mut NkBuffer,
+               config: &NkConvertConfig) {
         let mut vertex_buffer = self.buffers.vertex_buffer.write().unwrap();
         let mut vertex_buffer = unsafe {
             std::slice::from_raw_parts_mut(&mut *vertex_buffer as *mut [_] as *mut u8,
@@ -377,10 +378,7 @@ impl Renderer {
         };
         let mut index_buffer = NkBuffer::with_fixed(&mut index_buffer);
 
-        ctx.convert(nk_cmd_buffer,
-                    &mut vertex_buffer,
-                    &mut index_buffer,
-                    config);
+        ctx.convert(nk_cmd_buffer, &mut vertex_buffer, &mut index_buffer, config);
     }
 
     fn find_texture(&self, id: i32) -> Option<&Texture> {
@@ -400,15 +398,15 @@ impl Renderer {
         NkDrawVertexLayoutElements::new(&[(NK_VERTEX_POSITION,
                                            NK_FORMAT_FLOAT,
                                            Renderer::get_shader_offset("pos")),
-            (NK_VERTEX_TEXCOORD,
-             NK_FORMAT_FLOAT,
-             Renderer::get_shader_offset("uv")),
-            (NK_VERTEX_COLOR,
-             NK_FORMAT_R32G32B32A32_FLOAT,
-             Renderer::get_shader_offset("color")),
-            (NK_VERTEX_ATTRIBUTE_COUNT,
-             NK_FORMAT_COUNT,
-             Renderer::get_shader_offset("_count"))])
+                                          (NK_VERTEX_TEXCOORD,
+                                           NK_FORMAT_FLOAT,
+                                           Renderer::get_shader_offset("uv")),
+                                          (NK_VERTEX_COLOR,
+                                           NK_FORMAT_R32G32B32A32_FLOAT,
+                                           Renderer::get_shader_offset("color")),
+                                          (NK_VERTEX_ATTRIBUTE_COUNT,
+                                           NK_FORMAT_COUNT,
+                                           Renderer::get_shader_offset("_count"))])
     }
 }
 

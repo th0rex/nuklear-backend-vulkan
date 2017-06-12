@@ -7,7 +7,9 @@
 // except according to those terms.
 
 use vulkano::format::{ClearValue, Format};
-use vulkano::framebuffer::{LayoutAttachmentDescription, LayoutPassDependencyDescription, LayoutPassDescription, LoadOp, RenderPassDesc, RenderPassDescClearValues, StoreOp};
+use vulkano::framebuffer::{LayoutAttachmentDescription, LayoutPassDependencyDescription,
+                           LayoutPassDescription, LoadOp, RenderPassDesc,
+                           RenderPassDescClearValues, StoreOp};
 use vulkano::image::ImageLayout;
 
 pub struct CustomRenderPassDesc {
