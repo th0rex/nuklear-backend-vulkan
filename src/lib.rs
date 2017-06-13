@@ -66,10 +66,9 @@ quick_error! {
         TextureNotFound {
             display("nuklear sent a texture id to draw that was never created")
         }
-        VulkanOom(err: OomError, place: &'static str) {
-            display("vulkan is out of memory at {}: {:?}", place, err)
-            context(str: &'static str, err: OomError)
-                -> (err, str)
+        VulkanOom(err: OomError) {
+            display("vulkan is out of memory: {:?}", err)
+            from()
         }
     }
 }
@@ -130,12 +129,6 @@ impl Buffers {
             vertex_count,
         }
     }
-}
-
-pub struct BackgroundTexture {
-    index_buffer: Arc<CpuAccessibleBuffer<[u16]>>,
-    texture: Texture,
-    vertex_buffer: Arc<CpuAccessibleBuffer<[vs::Vertex]>>,
 }
 
 struct Texture {
@@ -200,6 +193,7 @@ pub struct Renderer {
     fs: Arc<fs::Shader>,
     pipeline: Pipeline,
     queue: Arc<Queue>,
+    render_pass: Arc<RenderPass<CustomRenderPassDesc>>,
     sampler: Arc<Sampler>,
     swapchain: Arc<Swapchain>,
     textures: Vec<Texture>,
@@ -228,41 +222,11 @@ impl Renderer {
                                        .build_render_pass(device.clone())
                                        .unwrap());
 
-        let pipeline_params = GraphicsPipelineParams {
-            vertex_input: SingleBufferDefinition::new(),
-            vertex_shader: vs.main_entry_point(),
-            input_assembly: InputAssembly::triangle_list(),
-            tessellation: None,
-            geometry_shader: None,
-            viewport: ViewportsState::DynamicScissors {
-                viewports: vec![Viewport {
-                                    origin: [0f32, 0f32],
-                                    depth_range: 0f32..1f32,
-                                    dimensions: [dimensions[0] as f32, dimensions[1] as f32],
-                                }],
-            },
-            raster: Default::default(),
-            multisample: Multisample::disabled(),
-            fragment_shader: fs.main_entry_point(),
-            depth_stencil: DepthStencil::disabled(),
-            blend: Blend::alpha_blending(),
-            render_pass: Subpass::from(render_pass.clone(), 0).unwrap(),
-        };
-
-        let pipeline = Arc::new(GraphicsPipeline::new(device.clone(), pipeline_params).unwrap());
-
-        let frame_buffers = images
-            .iter()
-            .map(|image| {
-                     Arc::new(Framebuffer::start(render_pass.clone())
-                                  .add(image.clone())
-                                  .unwrap()
-                                  .build()
-                                  .unwrap())
-                 })
-            .collect();
+        let pipeline = Renderer::create_pipeline(&device, dimensions, &fs, &render_pass, &vs);
 
         let sampler = Sampler::simple_repeat_linear_no_mipmap(device.clone());
+
+        let frame_buffers = Renderer::create_frame_buffers(images, &render_pass);
 
         Renderer {
             buffers,
@@ -272,6 +236,7 @@ impl Renderer {
             fs: fs.clone(),
             pipeline,
             queue,
+            render_pass,
             sampler,
             swapchain,
             textures: vec![],
@@ -294,80 +259,15 @@ impl Renderer {
         NkHandle::from_id(self.textures.len() as i32 - 1)
     }
 
-    pub fn background_texture(&self,
-                              data: &[u8],
-                              width: u32,
-                              height: u32,
-                              sampler: Option<Arc<Sampler>>)
-                              -> BackgroundTexture {
-        use vs::Vertex;
-
-        let w = self.dimensions[0] as f32;
-        let h = self.dimensions[0] as f32;
-
-        BackgroundTexture {
-            index_buffer: CpuAccessibleBuffer::from_iter(self.device.clone(),
-                                                         BufferUsage::all(),
-                                                         Some(self.queue.family()),
-                                                         [0, 1, 2, 1, 2, 3].into_iter().cloned())
-                    .expect("couldn't create index_buffer"),
-            texture: Texture::new(data,
-                                  width,
-                                  height,
-                                  &self.device,
-                                  Some(self.queue.family()),
-                                  &sampler.unwrap_or(self.sampler.clone()),
-                                  &self.buffers.uniform_buffer,
-                                  &self.pipeline),
-            vertex_buffer: CpuAccessibleBuffer::from_iter(self.device.clone(),
-                                                          BufferUsage::all(),
-                                                          Some(self.queue.family()),
-                                                          [Vertex {
-                                                               pos: [-w, h],
-                                                               uv: [0f32, 0f32],
-                                                               color: [1f32, 1f32, 1f32, 1f32],
-                                                               _count: 0,
-                                                           },
-                                                           Vertex {
-                                                               pos: [w, h],
-                                                               uv: [1f32, 0f32],
-                                                               color: [1f32, 1f32, 1f32, 1f32],
-                                                               _count: 0,
-                                                           },
-                                                           Vertex {
-                                                               pos: [w, -h],
-                                                               uv: [1f32, 1f32],
-                                                               color: [1f32, 1f32, 1f32, 1f32],
-                                                               _count: 0,
-                                                           },
-                                                           Vertex {
-                                                               pos: [-w, -h],
-                                                               uv: [0f32, 1f32],
-                                                               color: [1f32, 1f32, 1f32, 1f32],
-                                                               _count: 0,
-                                                           }]
-                                                                  .into_iter()
-                                                                  .cloned())
-                    .expect("couldn't create vertex buffer"),
-        }
-    }
-
     #[inline]
     pub fn get_frame_buffer(&self, image_num: usize) -> Option<Arc<CustomFrameBuffer>> {
         self.frame_buffers.get(image_num).map(|x| x.clone())
     }
 
-    #[inline]
-    pub fn initial_commands(&self) -> Result<ImageCommandBuffer> {
-        self.initial_commands_with(&[])
-    }
-
-    pub fn initial_commands_with(&self,
-                                 bg_textures: &[&BackgroundTexture])
+    pub fn initial_commands(&self)
                                  -> Result<ImageCommandBuffer> {
         let mut command_buffer = AutoCommandBufferBuilder::new(self.device.clone(),
-                                                               self.queue.family())
-                .context("creating initial commands")?;
+                                                               self.queue.family())?;
 
         for texture in &self.textures {
             command_buffer =
@@ -375,16 +275,7 @@ impl Renderer {
                     .copy_buffer_to_image(texture.buffer.clone(), texture.texture.clone())?;
         }
 
-        for bg_texture in bg_textures {
-            command_buffer = command_buffer
-                .copy_buffer_to_image(bg_texture.texture.buffer.clone(),
-                                      bg_texture.texture.texture.clone())?;
-        }
-
-        command_buffer
-            .build()
-            .context("building initial commands")
-            .map_err(From::from)
+        command_buffer.build().map_err(From::from)
     }
 
     pub fn initialize_convert_config(&self, config: &mut NkConvertConfig) {
@@ -442,27 +333,23 @@ impl Renderer {
         Ok(command_buffer)
     }
 
-    pub fn render_background_texture(&self,
-                                     bg_texture: &BackgroundTexture,
-                                     command_buffer: AutoCommandBufferBuilder)
-                                     -> Result<AutoCommandBufferBuilder> {
-        command_buffer
-            .draw_indexed(self.pipeline.clone(),
-                          DynamicState {
-                              scissors: Some(vec![Scissor {
-                                                      origin: [0, 0],
-                                                      dimensions: [1280, 1024],
-                                                  }]),
-                              ..Default::default()
-                          },
-                          bg_texture.vertex_buffer.clone(),
-                          bg_texture.index_buffer.clone(),
-                          bg_texture.texture.set.clone(),
-                          ())
-            .map_err(From::from)
+    pub fn resize(&mut self, dimensions: [u32; 2]) -> Result<Arc<Swapchain>> {
+        self.dimensions = dimensions;
+        let (swapchain, images) = self.swapchain.recreate_with_dimension(dimensions)?;
 
+        self.pipeline = Renderer::create_pipeline(&self.device,
+                                                  dimensions,
+                                                  &self.fs,
+                                                  &self.render_pass,
+                                                  &self.vs);
+        self.frame_buffers = Renderer::create_frame_buffers(&images, &self.render_pass);
+        self.swapchain = swapchain.clone();
+
+        let mut data = self.buffers.uniform_buffer.write().unwrap();
+        data.scale = [2f32 / dimensions[0] as f32, 2f32 / dimensions[1] as f32];
+
+        Ok(swapchain)
     }
-
 
     fn convert(&mut self,
                ctx: &mut NkContext,
@@ -483,6 +370,51 @@ impl Renderer {
         let mut index_buffer = NkBuffer::with_fixed(&mut index_buffer);
 
         ctx.convert(nk_cmd_buffer, &mut vertex_buffer, &mut index_buffer, config);
+    }
+
+    fn create_frame_buffers(images: &[Arc<SwapchainImage>],
+                            pass: &Arc<RenderPass<CustomRenderPassDesc>>)
+                            -> Vec<Arc<CustomFrameBuffer>> {
+        images
+            .iter()
+            .map(|image| {
+                     Arc::new(Framebuffer::start(pass.clone())
+                                  .add(image.clone())
+                                  .unwrap()
+                                  .build()
+                                  .unwrap())
+                 })
+            .collect()
+    }
+
+    fn create_pipeline(device: &Arc<Device>,
+                       dimensions: [u32; 2],
+                       fs: &Arc<fs::Shader>,
+                       render_pass: &Arc<RenderPass<CustomRenderPassDesc>>,
+                       vs: &Arc<vs::Shader>)
+                       -> Pipeline {
+        let pipeline_params = GraphicsPipelineParams {
+            vertex_input: SingleBufferDefinition::new(),
+            vertex_shader: vs.main_entry_point(),
+            input_assembly: InputAssembly::triangle_list(),
+            tessellation: None,
+            geometry_shader: None,
+            viewport: ViewportsState::DynamicScissors {
+                viewports: vec![Viewport {
+                                    origin: [0f32, 0f32],
+                                    depth_range: 0f32..1f32,
+                                    dimensions: [dimensions[0] as f32, dimensions[1] as f32],
+                                }],
+            },
+            raster: Default::default(),
+            multisample: Multisample::disabled(),
+            fragment_shader: fs.main_entry_point(),
+            depth_stencil: DepthStencil::disabled(),
+            blend: Blend::alpha_blending(),
+            render_pass: Subpass::from(render_pass.clone(), 0).unwrap(),
+        };
+
+        Arc::new(GraphicsPipeline::new(device.clone(), pipeline_params).unwrap())
     }
 
     fn find_texture(&self, id: i32) -> Option<&Texture> {
