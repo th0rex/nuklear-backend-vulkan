@@ -132,6 +132,12 @@ impl Buffers {
     }
 }
 
+pub struct BackgroundTexture {
+    index_buffer: Arc<CpuAccessibleBuffer<[u16]>>,
+    texture: Texture,
+    vertex_buffer: Arc<CpuAccessibleBuffer<[vs::Vertex]>>,
+}
+
 struct Texture {
     buffer: Arc<CpuAccessibleBuffer<[[u8; 4]]>>,
     set: Arc<DescriptorSet + Send + Sync>,
@@ -189,6 +195,7 @@ type Pipeline = Arc<GraphicsPipeline<SingleBufferDefinition<vs::Vertex>,
 pub struct Renderer {
     buffers: Buffers,
     device: Arc<Device>,
+    dimensions: [u32; 2],
     frame_buffers: Vec<Arc<CustomFrameBuffer>>,
     fs: Arc<fs::Shader>,
     pipeline: Pipeline,
@@ -260,6 +267,7 @@ impl Renderer {
         Renderer {
             buffers,
             device,
+            dimensions,
             frame_buffers,
             fs: fs.clone(),
             pipeline,
@@ -286,19 +294,93 @@ impl Renderer {
         NkHandle::from_id(self.textures.len() as i32 - 1)
     }
 
+    pub fn background_texture(&self,
+                              data: &[u8],
+                              width: u32,
+                              height: u32,
+                              sampler: Option<Arc<Sampler>>)
+                              -> BackgroundTexture {
+        use vs::Vertex;
+
+        let w = self.dimensions[0] as f32;
+        let h = self.dimensions[0] as f32;
+
+        BackgroundTexture {
+            index_buffer: CpuAccessibleBuffer::from_iter(self.device.clone(),
+                                                         BufferUsage::all(),
+                                                         Some(self.queue.family()),
+                                                         [0, 1, 2, 1, 2, 3].into_iter().cloned())
+                    .expect("couldn't create index_buffer"),
+            texture: Texture::new(data,
+                                  width,
+                                  height,
+                                  &self.device,
+                                  Some(self.queue.family()),
+                                  &sampler.unwrap_or(self.sampler.clone()),
+                                  &self.buffers.uniform_buffer,
+                                  &self.pipeline),
+            vertex_buffer: CpuAccessibleBuffer::from_iter(self.device.clone(),
+                                                          BufferUsage::all(),
+                                                          Some(self.queue.family()),
+                                                          [Vertex {
+                                                               pos: [-w, h],
+                                                               uv: [0f32, 0f32],
+                                                               color: [1f32, 1f32, 1f32, 1f32],
+                                                               _count: 0,
+                                                           },
+                                                           Vertex {
+                                                               pos: [w, h],
+                                                               uv: [1f32, 0f32],
+                                                               color: [1f32, 1f32, 1f32, 1f32],
+                                                               _count: 0,
+                                                           },
+                                                           Vertex {
+                                                               pos: [w, -h],
+                                                               uv: [1f32, 1f32],
+                                                               color: [1f32, 1f32, 1f32, 1f32],
+                                                               _count: 0,
+                                                           },
+                                                           Vertex {
+                                                               pos: [-w, -h],
+                                                               uv: [0f32, 1f32],
+                                                               color: [1f32, 1f32, 1f32, 1f32],
+                                                               _count: 0,
+                                                           }]
+                                                                  .into_iter()
+                                                                  .cloned())
+                    .expect("couldn't create vertex buffer"),
+        }
+    }
+
+    #[inline]
     pub fn get_frame_buffer(&self, image_num: usize) -> Option<Arc<CustomFrameBuffer>> {
         self.frame_buffers.get(image_num).map(|x| x.clone())
     }
 
+    #[inline]
     pub fn initial_commands(&self) -> Result<ImageCommandBuffer> {
+        self.initial_commands_with(&[])
+    }
+
+    pub fn initial_commands_with(&self,
+                                 bg_textures: &[&BackgroundTexture])
+                                 -> Result<ImageCommandBuffer> {
         let mut command_buffer = AutoCommandBufferBuilder::new(self.device.clone(),
                                                                self.queue.family())
                 .context("creating initial commands")?;
+
         for texture in &self.textures {
             command_buffer =
                 command_buffer
                     .copy_buffer_to_image(texture.buffer.clone(), texture.texture.clone())?;
         }
+
+        for bg_texture in bg_textures {
+            command_buffer = command_buffer
+                .copy_buffer_to_image(bg_texture.texture.buffer.clone(),
+                                      bg_texture.texture.texture.clone())?;
+        }
+
         command_buffer
             .build()
             .context("building initial commands")
@@ -360,6 +442,28 @@ impl Renderer {
         Ok(command_buffer)
     }
 
+    pub fn render_background_texture(&self,
+                                     bg_texture: &BackgroundTexture,
+                                     command_buffer: AutoCommandBufferBuilder)
+                                     -> Result<AutoCommandBufferBuilder> {
+        command_buffer
+            .draw_indexed(self.pipeline.clone(),
+                          DynamicState {
+                              scissors: Some(vec![Scissor {
+                                                      origin: [0, 0],
+                                                      dimensions: [1280, 1024],
+                                                  }]),
+                              ..Default::default()
+                          },
+                          bg_texture.vertex_buffer.clone(),
+                          bg_texture.index_buffer.clone(),
+                          bg_texture.texture.set.clone(),
+                          ())
+            .map_err(From::from)
+
+    }
+
+
     fn convert(&mut self,
                ctx: &mut NkContext,
                nk_cmd_buffer: &mut NkBuffer,
@@ -413,10 +517,10 @@ impl Renderer {
 mod vs {
     #[derive(Clone, Debug)]
     pub struct Vertex {
-        pos: [f32; 2],
-        uv: [f32; 2],
-        color: [f32; 4],
-        _count: i32,
+        pub pos: [f32; 2],
+        pub uv: [f32; 2],
+        pub color: [f32; 4],
+        pub _count: i32,
     }
     impl_vertex!(Vertex, pos, uv, color, _count);
 
