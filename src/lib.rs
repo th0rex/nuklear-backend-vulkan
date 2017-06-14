@@ -123,7 +123,7 @@ impl Buffers {
 }
 
 struct Texture {
-    buffer: Arc<CpuAccessibleBuffer<[[u8; 4]]>>,
+    buffer: Arc<CpuAccessibleBuffer<[u8]>>,
     set: Arc<DescriptorSet + Send + Sync>,
     texture: Arc<ImmutableImage<R8G8B8A8Unorm>>,
 }
@@ -144,10 +144,10 @@ impl Texture {
                                           family)
                 .unwrap();
 
-        let chunks = data.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]);
-
-        let buffer =
-            CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), family, chunks)
+        let buffer = CpuAccessibleBuffer::from_iter(device.clone(),
+                                                    BufferUsage::all(),
+                                                    family,
+                                                    data.iter().cloned())
                 .expect("failed to create texture buffer");
 
         let set = {
