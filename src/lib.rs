@@ -165,13 +165,12 @@ impl Texture {
     }
 }
 
-type CustomFrameBuffer = Framebuffer<Arc<RenderPass<CustomRenderPassDesc>>,
+/// The type of a `Framebuffer` for our `CustomRenderPassDesc`
+pub type CustomFrameBuffer = Framebuffer<Arc<RenderPass<CustomRenderPassDesc>>,
                                      ((), Arc<SwapchainImage>)>;
 
-type ImageCommandBuffer =
-    SubmitSyncLayer<AbstractStorageLayer<UnsafeCommandBuffer<Arc<StandardCommandPool>>>>;
-
-type Pipeline = Arc<GraphicsPipeline<SingleBufferDefinition<vs::Vertex>,
+/// The type of a `GraphicsPipeline` for our shaders and `CustomRenderPassDesc`.
+pub type Pipeline = Arc<GraphicsPipeline<SingleBufferDefinition<vs::Vertex>,
                                      PipelineLayout<PipelineLayoutDescUnion<vs::Layout,
                                                                             fs::Layout>>,
                                      Arc<RenderPass<CustomRenderPassDesc>>>>;
@@ -255,7 +254,7 @@ impl Renderer {
         self.frame_buffers.get(image_num).map(|x| x.clone())
     }
 
-    pub fn initial_commands(&self) -> Result<ImageCommandBuffer> {
+    pub fn initial_commands(&self) -> Result<AutoCommandBufferBuilder> {
         let mut command_buffer = AutoCommandBufferBuilder::new(self.device.clone(),
                                                                self.queue.family())?;
 
@@ -265,7 +264,7 @@ impl Renderer {
                     .copy_buffer_to_image(texture.buffer.clone(), texture.texture.clone())?;
         }
 
-        command_buffer.build().map_err(From::from)
+        Ok(command_buffer)
     }
 
     pub fn initialize_convert_config(&self, config: &mut NkConvertConfig) {
