@@ -8,7 +8,6 @@ readme = "README.md"
 repository = "https://github.com/th0rex/nuklear-backend-vulkan.git"
 
 [dependencies]
-cgmath = "0.14"
 nuklear-rust = "0.3"
 quick-error = "1.2"
 vulkano = "0.4"

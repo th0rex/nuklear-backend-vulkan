@@ -6,7 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate cgmath;
 extern crate nuklear_rust;
 #[macro_use]
 extern crate quick_error;
@@ -18,7 +17,6 @@ extern crate vulkano_shader_derive;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use cgmath::Vector2;
 use nuklear_rust::{NkBuffer, NkContext, NkConvertConfig, NkDrawVertexLayoutAttribute,
                    NkDrawVertexLayoutElements, NkDrawVertexLayoutFormat, NkHandle, NkRect};
 use quick_error::ResultExt;
@@ -107,16 +105,9 @@ impl Buffers {
                                                            BufferUsage::all(),
                                                            queue_family,
                                                            vs::ty::Data {
-                                                               scale: Vector2::new(2f32 /
-                                                                                   dimensions[0] as
-                                                                                   f32,
-                                                                                   2f32 /
-                                                                                   dimensions[1] as
-                                                                                   f32)
-                                                                       .into(),
-                                                               transform: Vector2::new(-1f32,
-                                                                                       -1f32)
-                                                                       .into(),
+                                                               scale: [2f32 / dimensions[0] as f32,
+                                                                       2f32 / dimensions[1] as f32],
+                                                               transform: [-1f32, -1f32],
                                                            })
                     .expect("failed to create uniform buffer"),
             vertex_buffer: unsafe {
@@ -264,8 +255,7 @@ impl Renderer {
         self.frame_buffers.get(image_num).map(|x| x.clone())
     }
 
-    pub fn initial_commands(&self)
-                                 -> Result<ImageCommandBuffer> {
+    pub fn initial_commands(&self) -> Result<ImageCommandBuffer> {
         let mut command_buffer = AutoCommandBufferBuilder::new(self.device.clone(),
                                                                self.queue.family())?;
 
