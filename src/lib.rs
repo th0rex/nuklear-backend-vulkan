@@ -51,6 +51,7 @@ mod render_pass;
 use render_pass::CustomRenderPassDesc;
 
 quick_error! {
+    /// Represents an `Error` that can be returned from any of the functions in this library.
     #[derive(Clone, Debug)]
     pub enum Error {
         CopyImageError(err: CommandBufferBuilderError<CmdCopyBufferToImageError>) {
@@ -71,8 +72,11 @@ quick_error! {
     }
 }
 
+/// Convenience wrapper around `Result<T, E>` where the error is always `Error`.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Holds various buffers needed for drawing nuklear things on the screen.
+/// This includes indices, vertices and uniforms.
 struct Buffers {
     index_buffer: Arc<CpuAccessibleBuffer<[u16]>>,
     index_buffer_slice: BufferSlice<[u16], Arc<CpuAccessibleBuffer<[u16]>>>,
@@ -83,6 +87,9 @@ struct Buffers {
 }
 
 impl Buffers {
+    /// Create a new instance of the `Buffers` class with the given window `dimensions`,
+    /// a maximum number of `vertex_count` vertices, a maximum number of `index_count` indices,
+    /// the given `device` and the given `queue_family`.
     fn new(dimensions: [u32; 2],
            vertex_count: usize,
            index_count: usize,
@@ -122,6 +129,8 @@ impl Buffers {
     }
 }
 
+/// A `Texture` contains a `buffer` with the data of the texture, a `texture` with the actual
+/// image and a `set` that has the `texture` and some uniform data bound.
 struct Texture {
     buffer: Arc<CpuAccessibleBuffer<[u8]>>,
     set: Arc<DescriptorSet + Send + Sync>,
@@ -129,6 +138,9 @@ struct Texture {
 }
 
 impl Texture {
+    /// Creates a new `Texture` with the given `data`, `width` and `height`.
+    /// The data must be in the format where r, g, b and a each take up one byte and are in that
+    /// order.
     fn new(data: &[u8],
            width: u32,
            height: u32,
@@ -167,14 +179,15 @@ impl Texture {
 
 /// The type of a `Framebuffer` for our `CustomRenderPassDesc`
 pub type CustomFrameBuffer = Framebuffer<Arc<RenderPass<CustomRenderPassDesc>>,
-                                     ((), Arc<SwapchainImage>)>;
+                                         ((), Arc<SwapchainImage>)>;
 
 /// The type of a `GraphicsPipeline` for our shaders and `CustomRenderPassDesc`.
 pub type Pipeline = Arc<GraphicsPipeline<SingleBufferDefinition<vs::Vertex>,
-                                     PipelineLayout<PipelineLayoutDescUnion<vs::Layout,
-                                                                            fs::Layout>>,
-                                     Arc<RenderPass<CustomRenderPassDesc>>>>;
+                                         PipelineLayout<PipelineLayoutDescUnion<vs::Layout,
+                                                                                fs::Layout>>,
+                                         Arc<RenderPass<CustomRenderPassDesc>>>>;
 
+/// The main interface to this library, provides anything needed to render a nuklear UI.
 pub struct Renderer {
     buffers: Buffers,
     device: Arc<Device>,
@@ -192,16 +205,32 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Creates a new `Renderer` with the given `device`, `queue`, `swapchain` and `images`.
+    #[inline]
     pub fn new(device: Arc<Device>,
                queue: Arc<Queue>,
                swapchain: Arc<Swapchain>,
                images: &[Arc<SwapchainImage>])
                -> Renderer {
+        Renderer::new_count(device, queue, swapchain, images, None, None)
+    }
+
+    /// Creates a new `Renderer` with the given `device`, `queue`, `swapchain` and `images`.
+    /// `vertex_count` can be optionally specified and contains the number of vertices to be
+    /// allocated. `index_count` can be optionally specified and contains the number of indices
+    /// to be allocated. They default to `512 * 1024` and `128 * 1024` respectively.
+    pub fn new_count(device: Arc<Device>,
+                     queue: Arc<Queue>,
+                     swapchain: Arc<Swapchain>,
+                     images: &[Arc<SwapchainImage>],
+                     vertex_count: Option<usize>,
+                     index_count: Option<usize>)
+                     -> Renderer {
         assert!(images.len() >= 1);
         let dimensions = images[0].dimensions();
         let buffers = Buffers::new(dimensions,
-                                   512 * 1024,
-                                   128 * 1024,
+                                   vertex_count.unwrap_or(512 * 1024),
+                                   index_count.unwrap_or(128 * 1024),
                                    &device,
                                    Some(queue.family()));
 
@@ -235,6 +264,12 @@ impl Renderer {
         }
     }
 
+    /// Adds a texture to this `Renderer` and returns a `NkHandle` to it.
+    /// The data must be in the following format:
+    /// r - 1 byte
+    /// g - 1 byte
+    /// b - 1 byte
+    /// a - 1 byte
     pub fn add_texture(&mut self, data: &[u8], width: u32, height: u32) -> NkHandle {
         self.textures
             .push(Texture::new(data,
@@ -249,11 +284,15 @@ impl Renderer {
         NkHandle::from_id(self.textures.len() as i32 - 1)
     }
 
+    /// Returns the frame buffer corresponding to the given `image_num`.
     #[inline]
     pub fn get_frame_buffer(&self, image_num: usize) -> Option<Arc<CustomFrameBuffer>> {
         self.frame_buffers.get(image_num).map(|x| x.clone())
     }
 
+    /// Returns an `AutoCommandBufferBuilder` that is filled with commands that
+    /// must be executed before actually drawing anything.
+    /// These commands copy all the image data to their corresponding textures.
     pub fn initial_commands(&self) -> Result<AutoCommandBufferBuilder> {
         let mut command_buffer = AutoCommandBufferBuilder::new(self.device.clone(),
                                                                self.queue.family())?;
@@ -267,12 +306,18 @@ impl Renderer {
         Ok(command_buffer)
     }
 
+    /// Initializes some fields of `NkConvertConfig`.
+    /// This will call `set_vertex_layout` and `set_vertex_size` with the appropriate
+    /// values.
     pub fn initialize_convert_config(&self, config: &mut NkConvertConfig) {
         config.set_vertex_layout(&self.vertex_layout_elements);
         config.set_vertex_size(size_of::<vs::Vertex>());
     }
 
-    // RENDER PASS MUST HAVE ALREADY BEGON (begin_render_pass needs to be called)
+    /// Renders an actual frame.
+    /// `begin_render_pass` must have already been called on the given `command_buffer` and
+    /// `end_render_pass` must also be called.
+    /// This allows for adding custom draw commands before or after calling this function.
     pub fn render(&mut self,
                   ctx: &mut NkContext,
                   nk_cmd_buffer: &mut NkBuffer,
@@ -322,6 +367,10 @@ impl Renderer {
         Ok(command_buffer)
     }
 
+    /// Notifies the renderer that the window has been resized.
+    /// Returns the new `Swapchain`.
+    /// Any calls to vulkan functions that need a swapchain must use the returned swapchain
+    /// after this function has been called.
     pub fn resize(&mut self, dimensions: [u32; 2]) -> Result<Arc<Swapchain>> {
         self.dimensions = dimensions;
         let (swapchain, images) = self.swapchain.recreate_with_dimension(dimensions)?;
