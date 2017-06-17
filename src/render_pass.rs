@@ -35,7 +35,6 @@ unsafe impl RenderPassDesc for CustomRenderPassDesc {
                  })
         } else {
             unreachable!();
-            None
         }
     }
 
@@ -54,7 +53,6 @@ unsafe impl RenderPassDesc for CustomRenderPassDesc {
                  })
         } else {
             unreachable!();
-            None
         }
     }
 
@@ -62,9 +60,8 @@ unsafe impl RenderPassDesc for CustomRenderPassDesc {
         0
     }
 
-    fn dependency_desc(&self, id: usize) -> Option<LayoutPassDependencyDescription> {
+    fn dependency_desc(&self, _: usize) -> Option<LayoutPassDependencyDescription> {
         unreachable!();
-        None
     }
 }
 

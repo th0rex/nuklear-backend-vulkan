@@ -14,19 +14,21 @@ extern crate vulkano;
 #[macro_use]
 extern crate vulkano_shader_derive;
 
+#[cfg(feature = "simple")]
+extern crate vulkano_win;
+#[cfg(feature = "simple")]
+extern crate winit;
+
 use std::mem::size_of;
 use std::sync::Arc;
 
 use nuklear_rust::{NkBuffer, NkContext, NkConvertConfig, NkDrawVertexLayoutAttribute,
                    NkDrawVertexLayoutElements, NkDrawVertexLayoutFormat, NkHandle, NkRect};
-use quick_error::ResultExt;
 use vulkano::OomError;
 use vulkano::buffer::{BufferSlice, BufferUsage, CpuAccessibleBuffer};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandAddError, CommandBufferBuilder,
                               CommandBufferBuilderError, DynamicState};
-use vulkano::command_buffer::cb::{AbstractStorageLayer, SubmitSyncLayer, UnsafeCommandBuffer};
 use vulkano::command_buffer::commands_raw::CmdCopyBufferToImageError;
-use vulkano::command_buffer::pool::StandardCommandPool;
 use vulkano::descriptor::descriptor_set::{DescriptorSet, SimpleDescriptorSetBuilder,
                                           SimpleDescriptorSetBufferExt,
                                           SimpleDescriptorSetImageExt};
@@ -35,7 +37,7 @@ use vulkano::device::{Device, Queue};
 use vulkano::format::R8G8B8A8Unorm;
 use vulkano::framebuffer::{Framebuffer, RenderPass, RenderPassDesc, Subpass};
 use vulkano::image::{Dimensions, ImmutableImage, SwapchainImage};
-use vulkano::instance::QueueFamily;
+use vulkano::instance::{InstanceCreationError, QueueFamily};
 use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineParams};
 use vulkano::pipeline::blend::Blend;
 use vulkano::pipeline::depth_stencil::DepthStencil;
@@ -45,14 +47,18 @@ use vulkano::pipeline::vertex::{SingleBufferDefinition, Vertex};
 use vulkano::pipeline::viewport::{Scissor, Viewport, ViewportsState};
 use vulkano::sampler::Sampler;
 use vulkano::swapchain::Swapchain;
+use vulkano_win::CreationError;
 
 mod render_pass;
+
+#[cfg(feature = "simple")]
+pub mod simple;
 
 use render_pass::CustomRenderPassDesc;
 
 quick_error! {
     /// Represents an `Error` that can be returned from any of the functions in this library.
-    #[derive(Clone, Debug)]
+    #[derive(Debug)]
     pub enum Error {
         CopyImageError(err: CommandBufferBuilderError<CmdCopyBufferToImageError>) {
             display("error trying to copy image: {:?}", err)
@@ -62,11 +68,25 @@ quick_error! {
             display("could not add command to `draw_indexed` call: {:?}", err)
             from()
         }
+        InstanceCreation(err: InstanceCreationError) {
+            display("Could not create vulkan instance: {:?}", err)
+            from()
+        }
+        NoDeviceFound {
+            display("No suitable device found")
+        }
+        NoQueueFound {
+            display("No queue for the window was found")
+        }
         TextureNotFound {
             display("nuklear sent a texture id to draw that was never created")
         }
         VulkanOom(err: OomError) {
             display("vulkan is out of memory: {:?}", err)
+            from()
+        }
+        WindowCreation(err: CreationError) {
+            display("Could not create window: {:?}", err)
             from()
         }
     }
@@ -212,20 +232,20 @@ impl Renderer {
                swapchain: Arc<Swapchain>,
                images: &[Arc<SwapchainImage>])
                -> Renderer {
-        Renderer::new_count(device, queue, swapchain, images, None, None)
+        Renderer::with_count(device, queue, swapchain, images, None, None)
     }
 
     /// Creates a new `Renderer` with the given `device`, `queue`, `swapchain` and `images`.
     /// `vertex_count` can be optionally specified and contains the number of vertices to be
     /// allocated. `index_count` can be optionally specified and contains the number of indices
     /// to be allocated. They default to `512 * 1024` and `128 * 1024` respectively.
-    pub fn new_count(device: Arc<Device>,
-                     queue: Arc<Queue>,
-                     swapchain: Arc<Swapchain>,
-                     images: &[Arc<SwapchainImage>],
-                     vertex_count: Option<usize>,
-                     index_count: Option<usize>)
-                     -> Renderer {
+    pub fn with_count(device: Arc<Device>,
+                      queue: Arc<Queue>,
+                      swapchain: Arc<Swapchain>,
+                      images: &[Arc<SwapchainImage>],
+                      vertex_count: Option<usize>,
+                      index_count: Option<usize>)
+                      -> Renderer {
         assert!(images.len() >= 1);
         let dimensions = images[0].dimensions();
         let buffers = Buffers::new(dimensions,
@@ -284,10 +304,22 @@ impl Renderer {
         NkHandle::from_id(self.textures.len() as i32 - 1)
     }
 
+    /// Returns the device used to create this renderer.
+    #[inline]
+    pub fn get_device(&self) -> Arc<Device> {
+        self.device.clone()
+    }
+
     /// Returns the frame buffer corresponding to the given `image_num`.
     #[inline]
     pub fn get_frame_buffer(&self, image_num: usize) -> Option<Arc<CustomFrameBuffer>> {
         self.frame_buffers.get(image_num).map(|x| x.clone())
+    }
+
+    /// Returns the queue used to create this renderer.
+    #[inline]
+    pub fn get_queue(&self) -> Arc<Queue> {
+        self.queue.clone()
     }
 
     /// Returns an `AutoCommandBufferBuilder` that is filled with commands that
@@ -327,7 +359,7 @@ impl Renderer {
         self.convert(ctx, nk_cmd_buffer, config);
 
         let mut start = 0;
-        let mut end = 0;
+        let mut end;
 
         for cmd in ctx.draw_command_iterator(&nk_cmd_buffer) {
             if cmd.elem_count() < 1 {
@@ -521,6 +553,7 @@ void main() {
     gl_Position = vec4(pos * constants.scale + constants.transform, 0, 1);
 }
 "]
+    #[allow(unused)]
     struct Dummy;
 }
 
@@ -541,5 +574,6 @@ void main() {
     fragmentColor = color * texture(sTexture, uv.st);
 }
 "]
+    #[allow(unused)]
     struct Dummy;
 }
