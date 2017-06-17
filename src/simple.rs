@@ -53,7 +53,10 @@ pub trait State {
 
     /// Creates a new instance of `Media` and initializes it.
     /// Also must return a main font to use for the application.
-    fn load_media(cfg: &mut NkFontConfig, atlas: &mut NkFontAtlas) -> (Self::Media, Box<NkFont>);
+    fn load_media(cfg: &mut NkFontConfig,
+                  atlas: &mut NkFontAtlas,
+                  renderer: &mut Renderer)
+                  -> (Self::Media, Box<NkFont>);
 
     /// Renders the UI and returns an `Action` that determines whether the window should be
     /// closed or not.
@@ -239,7 +242,7 @@ impl<S: State> InitUI<S> {
         let mut alloc = NkAllocator::new_vec();
         let mut atlas = NkFontAtlas::new(&mut alloc);
 
-        let (media, font) = S::load_media(&mut font_config, &mut atlas);
+        let (media, font) = S::load_media(&mut font_config, &mut atlas, &mut self.renderer);
 
         let font_texture = {
             let (b, w, h) = atlas.bake(NkFontAtlasFormat::NK_FONT_ATLAS_RGBA32);
