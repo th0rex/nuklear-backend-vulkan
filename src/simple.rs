@@ -171,7 +171,7 @@ impl<'a> Builder<'a> {
             window = window.with_max_dimensions(max[0], max[1]);
         }
 
-        let window = window.build_vk_surface(&*events_loop, instance.clone())?;
+        let window = window.build_vk_surface(&*events_loop, instance.clone()).expect("could not create window");
 
         let queue = physical
             .queue_families()

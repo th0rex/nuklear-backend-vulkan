@@ -47,7 +47,6 @@ use vulkano::pipeline::vertex::{SingleBufferDefinition, Vertex};
 use vulkano::pipeline::viewport::{Scissor, Viewport, ViewportsState};
 use vulkano::sampler::Sampler;
 use vulkano::swapchain::Swapchain;
-use vulkano_win::CreationError;
 
 mod render_pass;
 
@@ -83,10 +82,6 @@ quick_error! {
         }
         VulkanOom(err: OomError) {
             display("vulkan is out of memory: {:?}", err)
-            from()
-        }
-        WindowCreation(err: CreationError) {
-            display("Could not create window: {:?}", err)
             from()
         }
     }
