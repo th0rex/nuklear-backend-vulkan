@@ -61,10 +61,11 @@ pub trait State {
 
     /// Creates a new instance of `Media` and initializes it.
     /// Also must return a main font to use for the application.
-    fn load_media(cfg: &mut NkFontConfig,
-                  atlas: &mut NkFontAtlas,
-                  renderer: &mut Renderer)
-                  -> (Self::Media, Box<NkFont>);
+    fn load_media(
+        cfg: &mut NkFontConfig,
+        atlas: &mut NkFontAtlas,
+        renderer: &mut Renderer,
+    ) -> (Self::Media, Box<NkFont>);
 
     /// Renders the UI and returns an `Action` that determines whether the window should be
     /// closed or not.
@@ -152,12 +153,14 @@ impl<'a> Builder<'a> {
             Instance::new(None, &extensions, None)?
         };
 
-        let physical = PhysicalDevice::enumerate(&instance)
-            .next()
-            .ok_or(Error::NoDeviceFound)?;
+        let physical = PhysicalDevice::enumerate(&instance).next().ok_or(
+            Error::NoDeviceFound,
+        )?;
 
         let events_loop = Arc::new(EventsLoop::new());
         let mut window = WindowBuilder::new();
+
+        window = window.with_dimensions(self.dimensions[0], self.dimensions[1]);
 
         if let Some(t) = self.window_title {
             window = window.with_title(t);
@@ -171,11 +174,15 @@ impl<'a> Builder<'a> {
             window = window.with_max_dimensions(max[0], max[1]);
         }
 
-        let window = window.build_vk_surface(&*events_loop, instance.clone()).expect("could not create window");
+        let window = window
+            .build_vk_surface(&*events_loop, instance.clone())
+            .expect("could not create window");
 
         let queue = physical
             .queue_families()
-            .find(|&q| q.supports_graphics() && window.surface().is_supported(q).unwrap_or(false))
+            .find(|&q| {
+                q.supports_graphics() && window.surface().is_supported(q).unwrap_or(false)
+            })
             .ok_or(Error::NoQueueFound)?;
 
         let (device, mut queue) = {
@@ -184,21 +191,21 @@ impl<'a> Builder<'a> {
                 ..DeviceExtensions::none()
             };
 
-            Device::new(&physical,
-                        physical.supported_features(),
-                        &device_ext,
-                        [(queue, 0.5)].iter().cloned())
-                    .expect("failed to create device")
+            Device::new(
+                &physical,
+                physical.supported_features(),
+                &device_ext,
+                [(queue, 0.5)].iter().cloned(),
+            ).expect("failed to create device")
         };
 
         let queue = queue.next().ok_or(Error::NoQueueFound)?;
 
         let (swapchain, images) = {
             // Theres nothing we can do, swapchain::surface::CapabilitiesError is not exported.
-            let caps = window
-                .surface()
-                .capabilities(physical)
-                .expect("failed to get capabilities of window surface");
+            let caps = window.surface().capabilities(physical).expect(
+                "failed to get capabilities of window surface",
+            );
 
             let dimensions = caps.current_extent.unwrap_or(self.dimensions);
 
@@ -206,33 +213,37 @@ impl<'a> Builder<'a> {
             let alpha = caps.supported_composite_alpha.iter().next().unwrap();
             let format = caps.supported_formats[0].0;
 
-            Swapchain::new(device.clone(),
-                           window.surface().clone(),
-                           max(caps.min_image_count, self.images.unwrap_or(0)),
-                           format,
-                           dimensions,
-                           1,
-                           caps.supported_usage_flags,
-                           &queue,
-                           SurfaceTransform::Identity,
-                           alpha,
-                           present,
-                           true,
-                           None)?
+            Swapchain::new(
+                device.clone(),
+                window.surface().clone(),
+                max(caps.min_image_count, self.images.unwrap_or(0)),
+                format,
+                dimensions,
+                1,
+                caps.supported_usage_flags,
+                &queue,
+                SurfaceTransform::Identity,
+                alpha,
+                present,
+                true,
+                None,
+            )?
         };
 
         Ok(InitUI {
-               events_loop,
-               renderer: Renderer::with_count(device.clone(),
-                                              queue.clone(),
-                                              swapchain.clone(),
-                                              &images,
-                                              self.vertex_count,
-                                              self.index_count),
-               state,
-               swapchain,
-               window,
-           })
+            events_loop,
+            renderer: Renderer::with_count(
+                device.clone(),
+                queue.clone(),
+                swapchain.clone(),
+                &images,
+                self.vertex_count,
+                self.index_count,
+            ),
+            state,
+            swapchain,
+            window,
+        })
     }
 }
 
@@ -336,24 +347,26 @@ impl<S: State> UI<S> {
             acquire_next_image(swapchain.clone(), Duration::new(1, 0)).unwrap();
 
         let command_buffer = renderer.initial_commands().unwrap().build().unwrap();
-        Box::new(previous_frame
-                     .join(acquire_future)
-                     .then_execute(queue.clone(), command_buffer)
-                     .unwrap()
-                     .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
-                     .then_signal_fence_and_flush()
-                     .unwrap())
+        Box::new(
+            previous_frame
+                .join(acquire_future)
+                .then_execute(queue.clone(), command_buffer)
+                .unwrap()
+                .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
+                .then_signal_fence_and_flush()
+                .unwrap(),
+        )
     }
 
     fn render_frame(&mut self, mut previous_frame: Box<GpuFuture>) -> Box<GpuFuture> {
         let &mut Self {
-                     ref mut context,
-                     ref convert_config,
-                     command_buffer: ref mut nk_command_buffer,
-                     ref mut renderer,
-                     ref swapchain,
-                     ..
-                 } = self;
+            ref mut context,
+            ref convert_config,
+            command_buffer: ref mut nk_command_buffer,
+            ref mut renderer,
+            ref swapchain,
+            ..
+        } = self;
         let queue = renderer.get_queue();
 
         let device = renderer.get_device();
@@ -365,9 +378,11 @@ impl<S: State> UI<S> {
 
         let command_buffer = AutoCommandBufferBuilder::new(device.clone(), queue.family())
             .unwrap()
-            .begin_render_pass(frame_buffer,
-                               false,
-                               vec![[0.2f32, 0.2f32, 0.5f32, 1f32].into()])
+            .begin_render_pass(
+                frame_buffer,
+                false,
+                vec![[0.2f32, 0.2f32, 0.5f32, 1f32].into()],
+            )
             .unwrap();
 
         let command_buffer = renderer
@@ -378,14 +393,15 @@ impl<S: State> UI<S> {
             .build()
             .unwrap();
 
-        previous_frame =
-            Box::new(previous_frame
-                         .join(acquire_future)
-                         .then_execute(queue.clone(), command_buffer)
-                         .unwrap()
-                         .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
-                         .then_signal_fence_and_flush()
-                         .unwrap());
+        previous_frame = Box::new(
+            previous_frame
+                .join(acquire_future)
+                .then_execute(queue.clone(), command_buffer)
+                .unwrap()
+                .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
+                .then_signal_fence_and_flush()
+                .unwrap(),
+        );
 
         context.clear();
 
@@ -396,67 +412,66 @@ impl<S: State> UI<S> {
         let mut done = false;
 
         let &mut Self {
-                     context: ref mut ctx,
-                     ref mut mx,
-                     ref mut my,
-                     ref mut renderer,
-                     ref mut swapchain,
-                     ..
-                 } = self;
+            context: ref mut ctx,
+            ref mut mx,
+            ref mut my,
+            ref mut renderer,
+            ref mut swapchain,
+            ..
+        } = self;
 
         ctx.input_begin();
-        self.events_loop
-            .poll_events(|ev| {
-                let Event::WindowEvent { event, .. } = ev;
+        self.events_loop.poll_events(|ev| {
+            let Event::WindowEvent { event, .. } = ev;
 
-                match event {
-                    WindowEvent::Closed => done = true,
-                    WindowEvent::ReceivedCharacter(c) => {
-                        ctx.input_unicode(c);
-                    }
-                    WindowEvent::KeyboardInput(s, _, k, _) => {
-                        if let Some(k) = k {
-                            let key = match k {
-                                VirtualKeyCode::Back => NkKey::NK_KEY_BACKSPACE,
-                                VirtualKeyCode::Delete => NkKey::NK_KEY_DEL,
-                                VirtualKeyCode::Up => NkKey::NK_KEY_UP,
-                                VirtualKeyCode::Down => NkKey::NK_KEY_DOWN,
-                                VirtualKeyCode::Left => NkKey::NK_KEY_LEFT,
-                                VirtualKeyCode::Right => NkKey::NK_KEY_RIGHT,
-                                _ => NkKey::NK_KEY_NONE,
-                            };
-
-                            ctx.input_key(key, s == ElementState::Pressed);
-                        }
-                    }
-                    WindowEvent::MouseMoved(x, y) => {
-                        *mx = x;
-                        *my = y;
-                        ctx.input_motion(x, y);
-                    }
-                    WindowEvent::MouseInput(s, b) => {
-                        let button = match b {
-                            MouseButton::Left => NkButton::NK_BUTTON_LEFT,
-                            MouseButton::Middle => NkButton::NK_BUTTON_MIDDLE,
-                            MouseButton::Right => NkButton::NK_BUTTON_RIGHT,
-                            _ => NkButton::NK_BUTTON_MAX,
+            match event {
+                WindowEvent::Closed => done = true,
+                WindowEvent::ReceivedCharacter(c) => {
+                    ctx.input_unicode(c);
+                }
+                WindowEvent::KeyboardInput(s, _, k, _) => {
+                    if let Some(k) = k {
+                        let key = match k {
+                            VirtualKeyCode::Back => NkKey::NK_KEY_BACKSPACE,
+                            VirtualKeyCode::Delete => NkKey::NK_KEY_DEL,
+                            VirtualKeyCode::Up => NkKey::NK_KEY_UP,
+                            VirtualKeyCode::Down => NkKey::NK_KEY_DOWN,
+                            VirtualKeyCode::Left => NkKey::NK_KEY_LEFT,
+                            VirtualKeyCode::Right => NkKey::NK_KEY_RIGHT,
+                            _ => NkKey::NK_KEY_NONE,
                         };
 
-                        ctx.input_button(button, *mx, *my, s == ElementState::Pressed)
+                        ctx.input_key(key, s == ElementState::Pressed);
                     }
-                    WindowEvent::MouseWheel(d, _) => {
-                        if let MouseScrollDelta::LineDelta(_, y) = d {
-                            ctx.input_scroll(y * 22f32);
-                        } else if let MouseScrollDelta::PixelDelta(_, y) = d {
-                            ctx.input_scroll(y);
-                        }
-                    }
-                    WindowEvent::Resized(w, h) => {
-                        *swapchain = renderer.resize([w, h]).expect("Resize failed");
-                    }
-                    _ => (),
                 }
-            });
+                WindowEvent::MouseMoved(x, y) => {
+                    *mx = x;
+                    *my = y;
+                    ctx.input_motion(x, y);
+                }
+                WindowEvent::MouseInput(s, b) => {
+                    let button = match b {
+                        MouseButton::Left => NkButton::NK_BUTTON_LEFT,
+                        MouseButton::Middle => NkButton::NK_BUTTON_MIDDLE,
+                        MouseButton::Right => NkButton::NK_BUTTON_RIGHT,
+                        _ => NkButton::NK_BUTTON_MAX,
+                    };
+
+                    ctx.input_button(button, *mx, *my, s == ElementState::Pressed)
+                }
+                WindowEvent::MouseWheel(d, _) => {
+                    if let MouseScrollDelta::LineDelta(_, y) = d {
+                        ctx.input_scroll(y * 22f32);
+                    } else if let MouseScrollDelta::PixelDelta(_, y) = d {
+                        ctx.input_scroll(y);
+                    }
+                }
+                WindowEvent::Resized(w, h) => {
+                    *swapchain = renderer.resize([w, h]).expect("Resize failed");
+                }
+                _ => (),
+            }
+        });
         ctx.input_end();
 
         if done {
