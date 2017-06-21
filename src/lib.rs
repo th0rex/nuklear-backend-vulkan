@@ -32,19 +32,15 @@ use vulkano::command_buffer::commands_raw::CmdCopyBufferToImageError;
 use vulkano::descriptor::descriptor_set::{DescriptorSet, SimpleDescriptorSetBuilder,
                                           SimpleDescriptorSetBufferExt,
                                           SimpleDescriptorSetImageExt};
-use vulkano::descriptor::pipeline_layout::{PipelineLayout, PipelineLayoutDescUnion};
+use vulkano::descriptor::PipelineLayoutAbstract;
 use vulkano::device::{Device, Queue};
 use vulkano::format::R8G8B8A8Unorm;
 use vulkano::framebuffer::{Framebuffer, RenderPass, RenderPassDesc, Subpass};
 use vulkano::image::{Dimensions, ImmutableImage, SwapchainImage};
 use vulkano::instance::{InstanceCreationError, QueueFamily};
-use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineParams};
-use vulkano::pipeline::blend::Blend;
-use vulkano::pipeline::depth_stencil::DepthStencil;
-use vulkano::pipeline::input_assembly::InputAssembly;
-use vulkano::pipeline::multisample::Multisample;
+use vulkano::pipeline::GraphicsPipeline;
 use vulkano::pipeline::vertex::{SingleBufferDefinition, Vertex};
-use vulkano::pipeline::viewport::{Scissor, Viewport, ViewportsState};
+use vulkano::pipeline::viewport::{Scissor, Viewport};
 use vulkano::sampler::Sampler;
 use vulkano::swapchain::Swapchain;
 
@@ -105,39 +101,42 @@ impl Buffers {
     /// Create a new instance of the `Buffers` class with the given window `dimensions`,
     /// a maximum number of `vertex_count` vertices, a maximum number of `index_count` indices,
     /// the given `device` and the given `queue_family`.
-    fn new(dimensions: [u32; 2],
-           vertex_count: usize,
-           index_count: usize,
-           device: &Arc<Device>,
-           queue_family: Option<QueueFamily>)
-           -> Buffers {
+    fn new(
+        dimensions: [u32; 2],
+        vertex_count: usize,
+        index_count: usize,
+        device: &Arc<Device>,
+        queue_family: Option<QueueFamily>,
+    ) -> Buffers {
         let index_buffer = unsafe {
-            CpuAccessibleBuffer::uninitialized_array(device.clone(),
-                                                     index_count,
-                                                     BufferUsage::all(),
-                                                     queue_family)
-                    .expect("failed to create index buffer")
+            CpuAccessibleBuffer::uninitialized_array(
+                device.clone(),
+                index_count,
+                BufferUsage::all(),
+                queue_family,
+            ).expect("failed to create index buffer")
         };
 
         Buffers {
             index_buffer: index_buffer.clone(),
             index_buffer_slice: BufferSlice::from_typed_buffer_access(index_buffer.clone()),
             index_count,
-            uniform_buffer: CpuAccessibleBuffer::from_data(device.clone(),
-                                                           BufferUsage::all(),
-                                                           queue_family,
-                                                           vs::ty::Data {
-                                                               scale: [2f32 / dimensions[0] as f32,
-                                                                       2f32 / dimensions[1] as f32],
-                                                               transform: [-1f32, -1f32],
-                                                           })
-                    .expect("failed to create uniform buffer"),
+            uniform_buffer: CpuAccessibleBuffer::from_data(
+                device.clone(),
+                BufferUsage::all(),
+                queue_family,
+                vs::ty::Data {
+                    scale: [2f32 / dimensions[0] as f32, 2f32 / dimensions[1] as f32],
+                    transform: [-1f32, -1f32],
+                },
+            ).expect("failed to create uniform buffer"),
             vertex_buffer: unsafe {
-                CpuAccessibleBuffer::uninitialized_array(device.clone(),
-                                                         vertex_count,
-                                                         BufferUsage::all(),
-                                                         queue_family)
-                        .expect("failed to create vertex buffer")
+                CpuAccessibleBuffer::uninitialized_array(
+                    device.clone(),
+                    vertex_count,
+                    BufferUsage::all(),
+                    queue_family,
+                ).expect("failed to create vertex buffer")
             },
             vertex_count,
         }
@@ -156,26 +155,29 @@ impl Texture {
     /// Creates a new `Texture` with the given `data`, `width` and `height`.
     /// The data must be in the format where r, g, b and a each take up one byte and are in that
     /// order.
-    fn new(data: &[u8],
-           width: u32,
-           height: u32,
-           device: &Arc<Device>,
-           family: Option<QueueFamily>,
-           sampler: &Arc<Sampler>,
-           uniforms: &Arc<CpuAccessibleBuffer<vs::ty::Data>>,
-           pipeline: &Pipeline)
-           -> Texture {
-        let texture = ImmutableImage::new(device.clone(),
-                                          Dimensions::Dim2d { width, height },
-                                          R8G8B8A8Unorm,
-                                          family)
-                .unwrap();
+    fn new(
+        data: &[u8],
+        width: u32,
+        height: u32,
+        device: &Arc<Device>,
+        family: Option<QueueFamily>,
+        sampler: &Arc<Sampler>,
+        uniforms: &Arc<CpuAccessibleBuffer<vs::ty::Data>>,
+        pipeline: &Pipeline,
+    ) -> Texture {
+        let texture = ImmutableImage::new(
+            device.clone(),
+            Dimensions::Dim2d { width, height },
+            R8G8B8A8Unorm,
+            family,
+        ).unwrap();
 
-        let buffer = CpuAccessibleBuffer::from_iter(device.clone(),
-                                                    BufferUsage::all(),
-                                                    family,
-                                                    data.iter().cloned())
-                .expect("failed to create texture buffer");
+        let buffer = CpuAccessibleBuffer::from_iter(
+            device.clone(),
+            BufferUsage::all(),
+            family,
+            data.iter().cloned(),
+        ).expect("failed to create texture buffer");
 
         let set = {
             let builder = SimpleDescriptorSetBuilder::new(pipeline.clone(), 0);
@@ -193,14 +195,19 @@ impl Texture {
 }
 
 /// The type of a `Framebuffer` for our `CustomRenderPassDesc`
-pub type CustomFrameBuffer = Framebuffer<Arc<RenderPass<CustomRenderPassDesc>>,
-                                         ((), Arc<SwapchainImage>)>;
+pub type CustomFrameBuffer = Framebuffer<
+    Arc<RenderPass<CustomRenderPassDesc>>,
+    ((), Arc<SwapchainImage>),
+>;
 
 /// The type of a `GraphicsPipeline` for our shaders and `CustomRenderPassDesc`.
-pub type Pipeline = Arc<GraphicsPipeline<SingleBufferDefinition<vs::Vertex>,
-                                         PipelineLayout<PipelineLayoutDescUnion<vs::Layout,
-                                                                                fs::Layout>>,
-                                         Arc<RenderPass<CustomRenderPassDesc>>>>;
+pub type Pipeline = Arc<
+    GraphicsPipeline<
+        SingleBufferDefinition<vs::Vertex>,
+        Box<PipelineLayoutAbstract + Send + Sync>,
+        Arc<RenderPass<CustomRenderPassDesc>>,
+    >,
+>;
 
 /// The main interface to this library, provides anything needed to render a nuklear UI.
 pub struct Renderer {
@@ -222,11 +229,12 @@ pub struct Renderer {
 impl Renderer {
     /// Creates a new `Renderer` with the given `device`, `queue`, `swapchain` and `images`.
     #[inline]
-    pub fn new(device: Arc<Device>,
-               queue: Arc<Queue>,
-               swapchain: Arc<Swapchain>,
-               images: &[Arc<SwapchainImage>])
-               -> Renderer {
+    pub fn new(
+        device: Arc<Device>,
+        queue: Arc<Queue>,
+        swapchain: Arc<Swapchain>,
+        images: &[Arc<SwapchainImage>],
+    ) -> Renderer {
         Renderer::with_count(device, queue, swapchain, images, None, None)
     }
 
@@ -234,27 +242,36 @@ impl Renderer {
     /// `vertex_count` can be optionally specified and contains the number of vertices to be
     /// allocated. `index_count` can be optionally specified and contains the number of indices
     /// to be allocated. They default to `512 * 1024` and `128 * 1024` respectively.
-    pub fn with_count(device: Arc<Device>,
-                      queue: Arc<Queue>,
-                      swapchain: Arc<Swapchain>,
-                      images: &[Arc<SwapchainImage>],
-                      vertex_count: Option<usize>,
-                      index_count: Option<usize>)
-                      -> Renderer {
+    pub fn with_count(
+        device: Arc<Device>,
+        queue: Arc<Queue>,
+        swapchain: Arc<Swapchain>,
+        images: &[Arc<SwapchainImage>],
+        vertex_count: Option<usize>,
+        index_count: Option<usize>,
+    ) -> Renderer {
         assert!(images.len() >= 1);
         let dimensions = images[0].dimensions();
-        let buffers = Buffers::new(dimensions,
-                                   vertex_count.unwrap_or(512 * 1024),
-                                   index_count.unwrap_or(128 * 1024),
-                                   &device,
-                                   Some(queue.family()));
+        let buffers = Buffers::new(
+            dimensions,
+            vertex_count.unwrap_or(512 * 1024),
+            index_count.unwrap_or(128 * 1024),
+            &device,
+            Some(queue.family()),
+        );
 
-        let vs = Arc::new(vs::Shader::load(&device).expect("failed to load vertex shader"));
-        let fs = Arc::new(fs::Shader::load(&device).expect("failed to load fragment shader"));
+        let vs = Arc::new(vs::Shader::load(&device).expect(
+            "failed to load vertex shader",
+        ));
+        let fs = Arc::new(fs::Shader::load(&device).expect(
+            "failed to load fragment shader",
+        ));
 
-        let render_pass = Arc::new(CustomRenderPassDesc { color: (swapchain.format(), 1) }
-                                       .build_render_pass(device.clone())
-                                       .unwrap());
+        let render_pass = Arc::new(
+            CustomRenderPassDesc { color: (swapchain.format(), 1) }
+                .build_render_pass(device.clone())
+                .unwrap(),
+        );
 
         let pipeline = Renderer::create_pipeline(&device, dimensions, &fs, &render_pass, &vs);
 
@@ -286,15 +303,16 @@ impl Renderer {
     /// b - 1 byte
     /// a - 1 byte
     pub fn add_texture(&mut self, data: &[u8], width: u32, height: u32) -> NkHandle {
-        self.textures
-            .push(Texture::new(data,
-                               width,
-                               height,
-                               &self.device,
-                               Some(self.queue.family()),
-                               &self.sampler,
-                               &self.buffers.uniform_buffer,
-                               &self.pipeline));
+        self.textures.push(Texture::new(
+            data,
+            width,
+            height,
+            &self.device,
+            Some(self.queue.family()),
+            &self.sampler,
+            &self.buffers.uniform_buffer,
+            &self.pipeline,
+        ));
 
         NkHandle::from_id(self.textures.len() as i32 - 1)
     }
@@ -321,13 +339,14 @@ impl Renderer {
     /// must be executed before actually drawing anything.
     /// These commands copy all the image data to their corresponding textures.
     pub fn initial_commands(&self) -> Result<AutoCommandBufferBuilder> {
-        let mut command_buffer = AutoCommandBufferBuilder::new(self.device.clone(),
-                                                               self.queue.family())?;
+        let mut command_buffer =
+            AutoCommandBufferBuilder::new(self.device.clone(), self.queue.family())?;
 
         for texture in &self.textures {
-            command_buffer =
-                command_buffer
-                    .copy_buffer_to_image(texture.buffer.clone(), texture.texture.clone())?;
+            command_buffer = command_buffer.copy_buffer_to_image(
+                texture.buffer.clone(),
+                texture.texture.clone(),
+            )?;
         }
 
         Ok(command_buffer)
@@ -345,12 +364,13 @@ impl Renderer {
     /// `begin_render_pass` must have already been called on the given `command_buffer` and
     /// `end_render_pass` must also be called.
     /// This allows for adding custom draw commands before or after calling this function.
-    pub fn render(&mut self,
-                  ctx: &mut NkContext,
-                  nk_cmd_buffer: &mut NkBuffer,
-                  config: &NkConvertConfig,
-                  mut command_buffer: AutoCommandBufferBuilder)
-                  -> Result<AutoCommandBufferBuilder> {
+    pub fn render(
+        &mut self,
+        ctx: &mut NkContext,
+        nk_cmd_buffer: &mut NkBuffer,
+        config: &NkConvertConfig,
+        mut command_buffer: AutoCommandBufferBuilder,
+    ) -> Result<AutoCommandBufferBuilder> {
         self.convert(ctx, nk_cmd_buffer, config);
 
         let mut start = 0;
@@ -363,16 +383,21 @@ impl Renderer {
 
             end = start + cmd.elem_count();
 
-            let texture = self.find_texture(cmd.texture().id().unwrap())
-                .ok_or(Error::TextureNotFound)?;
+            let texture = self.find_texture(cmd.texture().id().unwrap()).ok_or(
+                Error::TextureNotFound,
+            )?;
 
             let &NkRect { x, y, w, h } = cmd.clip_rect();
 
             let scissor = Scissor {
-                origin: [if x < 0f32 { 0 } else { x as _ },
-                         if y < 0f32 { 0 } else { y as _ }],
-                dimensions: [if x < 0f32 { (x + w) as _ } else { w as _ },
-                             if y < 0f32 { (h + y) as _ } else { h as _ }],
+                origin: [
+                    if x < 0f32 { 0 } else { x as _ },
+                    if y < 0f32 { 0 } else { y as _ },
+                ],
+                dimensions: [
+                    if x < 0f32 { (x + w) as _ } else { w as _ },
+                    if y < 0f32 { (h + y) as _ } else { h as _ },
+                ],
             };
 
             let slice = self.buffers.index_buffer_slice.clone();
@@ -402,11 +427,13 @@ impl Renderer {
         self.dimensions = dimensions;
         let (swapchain, images) = self.swapchain.recreate_with_dimension(dimensions)?;
 
-        self.pipeline = Renderer::create_pipeline(&self.device,
-                                                  dimensions,
-                                                  &self.fs,
-                                                  &self.render_pass,
-                                                  &self.vs);
+        self.pipeline = Renderer::create_pipeline(
+            &self.device,
+            dimensions,
+            &self.fs,
+            &self.render_pass,
+            &self.vs,
+        );
         self.frame_buffers = Renderer::create_frame_buffers(&images, &self.render_pass);
         self.swapchain = swapchain.clone();
 
@@ -416,70 +443,77 @@ impl Renderer {
         Ok(swapchain)
     }
 
-    fn convert(&mut self,
-               ctx: &mut NkContext,
-               nk_cmd_buffer: &mut NkBuffer,
-               config: &NkConvertConfig) {
+    fn convert(
+        &mut self,
+        ctx: &mut NkContext,
+        nk_cmd_buffer: &mut NkBuffer,
+        config: &NkConvertConfig,
+    ) {
         let mut vertex_buffer = self.buffers.vertex_buffer.write().unwrap();
         let mut vertex_buffer = unsafe {
-            std::slice::from_raw_parts_mut(&mut *vertex_buffer as *mut [_] as *mut u8,
-                                           size_of::<vs::Vertex>() * self.buffers.vertex_count)
+            std::slice::from_raw_parts_mut(
+                &mut *vertex_buffer as *mut [_] as *mut u8,
+                size_of::<vs::Vertex>() * self.buffers.vertex_count,
+            )
         };
         let mut vertex_buffer = NkBuffer::with_fixed(&mut vertex_buffer);
 
         let mut index_buffer = self.buffers.index_buffer.write().unwrap();
         let mut index_buffer = unsafe {
-            std::slice::from_raw_parts_mut(&mut *index_buffer as *mut [_] as *mut u8,
-                                           size_of::<u16>() * self.buffers.index_count)
+            std::slice::from_raw_parts_mut(
+                &mut *index_buffer as *mut [_] as *mut u8,
+                size_of::<u16>() * self.buffers.index_count,
+            )
         };
         let mut index_buffer = NkBuffer::with_fixed(&mut index_buffer);
 
         ctx.convert(nk_cmd_buffer, &mut vertex_buffer, &mut index_buffer, config);
     }
 
-    fn create_frame_buffers(images: &[Arc<SwapchainImage>],
-                            pass: &Arc<RenderPass<CustomRenderPassDesc>>)
-                            -> Vec<Arc<CustomFrameBuffer>> {
+    fn create_frame_buffers(
+        images: &[Arc<SwapchainImage>],
+        pass: &Arc<RenderPass<CustomRenderPassDesc>>,
+    ) -> Vec<Arc<CustomFrameBuffer>> {
         images
             .iter()
             .map(|image| {
-                     Arc::new(Framebuffer::start(pass.clone())
-                                  .add(image.clone())
-                                  .unwrap()
-                                  .build()
-                                  .unwrap())
-                 })
+                Arc::new(
+                    Framebuffer::start(pass.clone())
+                        .add(image.clone())
+                        .unwrap()
+                        .build()
+                        .unwrap(),
+                )
+            })
             .collect()
     }
 
-    fn create_pipeline(device: &Arc<Device>,
-                       dimensions: [u32; 2],
-                       fs: &Arc<fs::Shader>,
-                       render_pass: &Arc<RenderPass<CustomRenderPassDesc>>,
-                       vs: &Arc<vs::Shader>)
-                       -> Pipeline {
-        let pipeline_params = GraphicsPipelineParams {
-            vertex_input: SingleBufferDefinition::new(),
-            vertex_shader: vs.main_entry_point(),
-            input_assembly: InputAssembly::triangle_list(),
-            tessellation: None,
-            geometry_shader: None,
-            viewport: ViewportsState::DynamicScissors {
-                viewports: vec![Viewport {
-                                    origin: [0f32, 0f32],
-                                    depth_range: 0f32..1f32,
-                                    dimensions: [dimensions[0] as f32, dimensions[1] as f32],
-                                }],
-            },
-            raster: Default::default(),
-            multisample: Multisample::disabled(),
-            fragment_shader: fs.main_entry_point(),
-            depth_stencil: DepthStencil::disabled(),
-            blend: Blend::alpha_blending(),
-            render_pass: Subpass::from(render_pass.clone(), 0).unwrap(),
-        };
-
-        Arc::new(GraphicsPipeline::new(device.clone(), pipeline_params).unwrap())
+    fn create_pipeline(
+        device: &Arc<Device>,
+        dimensions: [u32; 2],
+        fs: &Arc<fs::Shader>,
+        render_pass: &Arc<RenderPass<CustomRenderPassDesc>>,
+        vs: &Arc<vs::Shader>,
+    ) -> Pipeline {
+        Arc::new(
+            GraphicsPipeline::start()
+                .vertex_input_single_buffer::<vs::Vertex>()
+                .vertex_shader(vs.main_entry_point(), ())
+                .triangle_list()
+                .viewports_fixed_scissors_dynamic(vec![
+                    Viewport {
+                        origin: [0f32, 0f32],
+                        depth_range: 0f32..1f32,
+                        dimensions: [dimensions[0] as f32, dimensions[1] as f32],
+                    },
+                ])
+                .fragment_shader(fs.main_entry_point(), ())
+                .depth_stencil_disabled()
+                .blend_alpha_blending()
+                .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
+                .build(device.clone())
+                .unwrap(),
+        )
     }
 
     fn find_texture(&self, id: i32) -> Option<&Texture> {
@@ -496,18 +530,30 @@ impl Renderer {
         use NkDrawVertexLayoutFormat::{NK_FORMAT_COUNT, NK_FORMAT_FLOAT,
                                        NK_FORMAT_R32G32B32A32_FLOAT};
 
-        NkDrawVertexLayoutElements::new(&[(NK_VERTEX_POSITION,
-                                           NK_FORMAT_FLOAT,
-                                           Renderer::get_shader_offset("pos")),
-                                          (NK_VERTEX_TEXCOORD,
-                                           NK_FORMAT_FLOAT,
-                                           Renderer::get_shader_offset("uv")),
-                                          (NK_VERTEX_COLOR,
-                                           NK_FORMAT_R32G32B32A32_FLOAT,
-                                           Renderer::get_shader_offset("color")),
-                                          (NK_VERTEX_ATTRIBUTE_COUNT,
-                                           NK_FORMAT_COUNT,
-                                           Renderer::get_shader_offset("_count"))])
+        NkDrawVertexLayoutElements::new(
+            &[
+                (
+                    NK_VERTEX_POSITION,
+                    NK_FORMAT_FLOAT,
+                    Renderer::get_shader_offset("pos"),
+                ),
+                (
+                    NK_VERTEX_TEXCOORD,
+                    NK_FORMAT_FLOAT,
+                    Renderer::get_shader_offset("uv"),
+                ),
+                (
+                    NK_VERTEX_COLOR,
+                    NK_FORMAT_R32G32B32A32_FLOAT,
+                    Renderer::get_shader_offset("color"),
+                ),
+                (
+                    NK_VERTEX_ATTRIBUTE_COUNT,
+                    NK_FORMAT_COUNT,
+                    Renderer::get_shader_offset("_count"),
+                ),
+            ],
+        )
     }
 }
 
