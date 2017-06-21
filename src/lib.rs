@@ -326,7 +326,7 @@ impl Renderer {
     /// Returns the frame buffer corresponding to the given `image_num`.
     #[inline]
     pub fn get_frame_buffer(&self, image_num: usize) -> Option<Arc<CustomFrameBuffer>> {
-        self.frame_buffers.get(image_num).map(|x| x.clone())
+        self.frame_buffers.get(image_num).cloned()
     }
 
     /// Returns the queue used to create this renderer.
@@ -376,7 +376,7 @@ impl Renderer {
         let mut start = 0;
         let mut end;
 
-        for cmd in ctx.draw_command_iterator(&nk_cmd_buffer) {
+        for cmd in ctx.draw_command_iterator(nk_cmd_buffer) {
             if cmd.elem_count() < 1 {
                 continue;
             }
