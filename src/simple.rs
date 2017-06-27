@@ -337,6 +337,8 @@ impl<S: State> UI<S> {
 
             previous_frame = self.render_frame(previous_frame);
 
+            self.state.update();
+
             if let Action::Close = self.update_ui() {
                 break;
             }
