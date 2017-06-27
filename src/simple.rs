@@ -69,7 +69,15 @@ pub trait State {
 
     /// Renders the UI and returns an `Action` that determines whether the window should be
     /// closed or not.
+    ///
+    /// **IMPORTANT**: This shouldn't do any updating (like polling some futures or what ever),
+    /// stuff like that should take place in the `update` function for ideal performance when using
+    /// multiple threads.
     fn render_ui(&mut self, ctx: &mut NkContext, media: &mut Self::Media) -> Action;
+
+    /// Update things that should run while vulkan is rendering things.
+    /// This is the place where most of your polling of futures or what ever should happen.
+    fn update(&mut self) {}
 }
 
 /// A way to build the `UI` structure of this module.
