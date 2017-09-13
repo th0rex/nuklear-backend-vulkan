@@ -8,18 +8,17 @@
 
 use std::cmp::max;
 use std::sync::Arc;
-use std::time::Duration;
 
 use nuklear_rust::{NkAllocator, NkAntiAliasing, NkBuffer, NkButton, NkContext, NkConvertConfig,
                    NkDrawNullTexture, NkFont, NkFontAtlas, NkFontAtlasFormat, NkFontConfig, NkKey};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferBuilder};
+use vulkano::command_buffer::AutoCommandBufferBuilder;
 use vulkano::device::Device;
 use vulkano::instance::{DeviceExtensions, Instance, PhysicalDevice};
 use vulkano::swapchain::{acquire_next_image, SurfaceTransform, Swapchain};
-use vulkano::sync::{GpuFuture, now};
+use vulkano::sync::{now, GpuFuture};
 use vulkano_win::{required_extensions, VkSurfaceBuild, Window};
-use winit::{ElementState, Event, EventsLoop, MouseButton, MouseScrollDelta, VirtualKeyCode,
-            WindowBuilder, WindowEvent};
+use winit::{ElementState, Event, EventsLoop, KeyboardInput, MouseButton, MouseScrollDelta,
+            VirtualKeyCode, WindowBuilder, WindowEvent};
 
 use super::{Error, Renderer, Result};
 
@@ -161,11 +160,11 @@ impl<'a> Builder<'a> {
             Instance::new(None, &extensions, None)?
         };
 
-        let physical = PhysicalDevice::enumerate(&instance).next().ok_or(
-            Error::NoDeviceFound,
-        )?;
+        let physical = PhysicalDevice::enumerate(&instance)
+            .next()
+            .ok_or(Error::NoDeviceFound)?;
 
-        let events_loop = Arc::new(EventsLoop::new());
+        let events_loop = EventsLoop::new();
         let mut window = WindowBuilder::new();
 
         window = window.with_dimensions(self.dimensions[0], self.dimensions[1]);
@@ -183,7 +182,7 @@ impl<'a> Builder<'a> {
         }
 
         let window = window
-            .build_vk_surface(&*events_loop, instance.clone())
+            .build_vk_surface(&events_loop, instance.clone())
             .expect("could not create window");
 
         let queue = physical
@@ -200,7 +199,7 @@ impl<'a> Builder<'a> {
             };
 
             Device::new(
-                &physical,
+                physical,
                 physical.supported_features(),
                 &device_ext,
                 [(queue, 0.5)].iter().cloned(),
@@ -211,9 +210,10 @@ impl<'a> Builder<'a> {
 
         let (swapchain, images) = {
             // Theres nothing we can do, swapchain::surface::CapabilitiesError is not exported.
-            let caps = window.surface().capabilities(physical).expect(
-                "failed to get capabilities of window surface",
-            );
+            let caps = window
+                .surface()
+                .capabilities(physical)
+                .expect("failed to get capabilities of window surface");
 
             let dimensions = caps.current_extent.unwrap_or(self.dimensions);
 
@@ -256,7 +256,7 @@ impl<'a> Builder<'a> {
 }
 
 pub struct InitUI<S: State> {
-    events_loop: Arc<EventsLoop>,
+    events_loop: EventsLoop,
     renderer: Renderer,
     state: S,
     swapchain: Arc<Swapchain>,
@@ -307,7 +307,7 @@ pub struct UI<S: State> {
     command_buffer: NkBuffer,
     context: NkContext,
     convert_config: NkConvertConfig,
-    events_loop: Arc<EventsLoop>,
+    events_loop: EventsLoop,
     font: Box<NkFont>,
     media: S::Media,
     mx: i32,
@@ -317,8 +317,7 @@ pub struct UI<S: State> {
     swapchain: Arc<Swapchain>,
     // This field is actually never used, but we need to keep the window alive.
     // If we would let it drop, we would not be able to handle ANY events.
-    #[allow(unused)]
-    window: Window,
+    #[allow(unused)] window: Window,
 }
 
 impl<S: State> UI<S> {
@@ -345,23 +344,21 @@ impl<S: State> UI<S> {
         }
     }
 
-    fn load_textures(&self, previous_frame: Box<GpuFuture>) -> Box<GpuFuture> {
-        let &Self {
-            ref renderer,
+    fn load_textures(&mut self, previous_frame: Box<GpuFuture>) -> Box<GpuFuture> {
+        let &mut Self {
+            ref mut renderer,
             ref swapchain,
             ..
         } = self;
         let queue = renderer.get_queue();
 
-        let (image_num, acquire_future) =
-            acquire_next_image(swapchain.clone(), Duration::new(1, 0)).unwrap();
+        let (image_num, acquire_future) = acquire_next_image(swapchain.clone(), None).unwrap();
 
-        let command_buffer = renderer.initial_commands().unwrap().build().unwrap();
+        let copy_future = renderer.initial_commands();
         Box::new(
             previous_frame
                 .join(acquire_future)
-                .then_execute(queue.clone(), command_buffer)
-                .unwrap()
+                .join(copy_future)
                 .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
                 .then_signal_fence_and_flush()
                 .unwrap(),
@@ -381,8 +378,7 @@ impl<S: State> UI<S> {
 
         let device = renderer.get_device();
 
-        let (image_num, acquire_future) =
-            acquire_next_image(swapchain.clone(), Duration::new(1, 0)).unwrap();
+        let (image_num, acquire_future) = acquire_next_image(swapchain.clone(), None).unwrap();
 
         let frame_buffer = renderer.get_frame_buffer(image_num).unwrap();
 
@@ -427,39 +423,50 @@ impl<S: State> UI<S> {
             ref mut my,
             ref mut renderer,
             ref mut swapchain,
+            ref mut events_loop,
             ..
         } = self;
 
         ctx.input_begin();
-        self.events_loop.poll_events(|ev| {
-            let Event::WindowEvent { event, .. } = ev;
-
-            match event {
+        events_loop.poll_events(|ev| match ev {
+            Event::WindowEvent { event, .. } => match event {
                 WindowEvent::Closed => done = true,
                 WindowEvent::ReceivedCharacter(c) => {
                     ctx.input_unicode(c);
                 }
-                WindowEvent::KeyboardInput(s, _, k, _) => {
-                    if let Some(k) = k {
-                        let key = match k {
-                            VirtualKeyCode::Back => NkKey::NK_KEY_BACKSPACE,
-                            VirtualKeyCode::Delete => NkKey::NK_KEY_DEL,
-                            VirtualKeyCode::Up => NkKey::NK_KEY_UP,
-                            VirtualKeyCode::Down => NkKey::NK_KEY_DOWN,
-                            VirtualKeyCode::Left => NkKey::NK_KEY_LEFT,
-                            VirtualKeyCode::Right => NkKey::NK_KEY_RIGHT,
-                            _ => NkKey::NK_KEY_NONE,
-                        };
+                WindowEvent::KeyboardInput {
+                    input: KeyboardInput {
+                        state: s,
+                        virtual_keycode: k,
+                        ..
+                    },
+                    ..
+                } => if let Some(k) = k {
+                    let key = match k {
+                        VirtualKeyCode::Back => NkKey::NK_KEY_BACKSPACE,
+                        VirtualKeyCode::Delete => NkKey::NK_KEY_DEL,
+                        VirtualKeyCode::Up => NkKey::NK_KEY_UP,
+                        VirtualKeyCode::Down => NkKey::NK_KEY_DOWN,
+                        VirtualKeyCode::Left => NkKey::NK_KEY_LEFT,
+                        VirtualKeyCode::Right => NkKey::NK_KEY_RIGHT,
+                        _ => NkKey::NK_KEY_NONE,
+                    };
 
-                        ctx.input_key(key, s == ElementState::Pressed);
-                    }
-                }
-                WindowEvent::MouseMoved(x, y) => {
+                    ctx.input_key(key, s == ElementState::Pressed);
+                },
+                WindowEvent::MouseMoved {
+                    position: (x, y), ..
+                } => {
+                    let (x, y) = (x as _, y as _);
                     *mx = x;
                     *my = y;
                     ctx.input_motion(x, y);
                 }
-                WindowEvent::MouseInput(s, b) => {
+                WindowEvent::MouseInput {
+                    state: s,
+                    button: b,
+                    ..
+                } => {
                     let button = match b {
                         MouseButton::Left => NkButton::NK_BUTTON_LEFT,
                         MouseButton::Middle => NkButton::NK_BUTTON_MIDDLE,
@@ -469,7 +476,7 @@ impl<S: State> UI<S> {
 
                     ctx.input_button(button, *mx, *my, s == ElementState::Pressed)
                 }
-                WindowEvent::MouseWheel(d, _) => {
+                WindowEvent::MouseWheel { delta: d, .. } => {
                     if let MouseScrollDelta::LineDelta(_, y) = d {
                         ctx.input_scroll(y * 22f32);
                     } else if let MouseScrollDelta::PixelDelta(_, y) = d {
@@ -480,7 +487,8 @@ impl<S: State> UI<S> {
                     *swapchain = renderer.resize([w, h]).expect("Resize failed");
                 }
                 _ => (),
-            }
+            },
+            _ => {}
         });
         ctx.input_end();
 

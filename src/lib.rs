@@ -26,23 +26,22 @@ use nuklear_rust::{NkBuffer, NkContext, NkConvertConfig, NkDrawVertexLayoutAttri
                    NkDrawVertexLayoutElements, NkDrawVertexLayoutFormat, NkHandle, NkRect};
 use vulkano::OomError;
 use vulkano::buffer::{BufferSlice, BufferUsage, CpuAccessibleBuffer};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandAddError, CommandBufferBuilder,
-                              CommandBufferBuilderError, DynamicState};
-use vulkano::command_buffer::commands_raw::CmdCopyBufferToImageError;
-use vulkano::descriptor::descriptor_set::{DescriptorSet, SimpleDescriptorSetBuilder,
-                                          SimpleDescriptorSetBufferExt,
-                                          SimpleDescriptorSetImageExt};
+use vulkano::command_buffer::{AutoCommandBuffer, AutoCommandBufferBuilder,
+                              CommandBufferExecFuture, CopyBufferImageError, DrawIndexedError,
+                              DynamicState};
+use vulkano::descriptor::descriptor_set::{DescriptorSet, PersistentDescriptorSet};
 use vulkano::descriptor::PipelineLayoutAbstract;
 use vulkano::device::{Device, Queue};
 use vulkano::format::R8G8B8A8Unorm;
 use vulkano::framebuffer::{Framebuffer, RenderPass, RenderPassDesc, Subpass};
 use vulkano::image::{Dimensions, ImmutableImage, SwapchainImage};
-use vulkano::instance::{InstanceCreationError, QueueFamily};
+use vulkano::instance::InstanceCreationError;
 use vulkano::pipeline::GraphicsPipeline;
 use vulkano::pipeline::vertex::{SingleBufferDefinition, Vertex};
 use vulkano::pipeline::viewport::{Scissor, Viewport};
 use vulkano::sampler::Sampler;
-use vulkano::swapchain::Swapchain;
+use vulkano::sync::{GpuFuture, NowFuture};
+use vulkano::swapchain::{Swapchain, SwapchainCreationError};
 
 mod render_pass;
 
@@ -55,11 +54,11 @@ quick_error! {
     /// Represents an `Error` that can be returned from any of the functions in this library.
     #[derive(Debug)]
     pub enum Error {
-        CopyImageError(err: CommandBufferBuilderError<CmdCopyBufferToImageError>) {
+        CopyImageError(err: CopyBufferImageError) {
             display("error trying to copy image: {:?}", err)
             from()
         }
-        DrawIndexed(err: CommandAddError) {
+        DrawIndexed(err: DrawIndexedError) {
             display("could not add command to `draw_indexed` call: {:?}", err)
             from()
         }
@@ -72,6 +71,10 @@ quick_error! {
         }
         NoQueueFound {
             display("No queue for the window was found")
+        }
+        SwapchainCreation(err: SwapchainCreationError) {
+            display("Could not create swapchain: {:?}", err)
+            from()
         }
         TextureNotFound {
             display("nuklear sent a texture id to draw that was never created")
@@ -106,14 +109,12 @@ impl Buffers {
         vertex_count: usize,
         index_count: usize,
         device: &Arc<Device>,
-        queue_family: Option<QueueFamily>,
     ) -> Buffers {
         let index_buffer = unsafe {
             CpuAccessibleBuffer::uninitialized_array(
                 device.clone(),
                 index_count,
                 BufferUsage::all(),
-                queue_family,
             ).expect("failed to create index buffer")
         };
 
@@ -124,7 +125,6 @@ impl Buffers {
             uniform_buffer: CpuAccessibleBuffer::from_data(
                 device.clone(),
                 BufferUsage::all(),
-                queue_family,
                 vs::ty::Data {
                     scale: [2f32 / dimensions[0] as f32, 2f32 / dimensions[1] as f32],
                     transform: [-1f32, -1f32],
@@ -135,7 +135,6 @@ impl Buffers {
                     device.clone(),
                     vertex_count,
                     BufferUsage::all(),
-                    queue_family,
                 ).expect("failed to create vertex buffer")
             },
             vertex_count,
@@ -146,9 +145,9 @@ impl Buffers {
 /// A `Texture` contains a `buffer` with the data of the texture, a `texture` with the actual
 /// image and a `set` that has the `texture` and some uniform data bound.
 struct Texture {
-    buffer: Arc<CpuAccessibleBuffer<[u8]>>,
     set: Arc<DescriptorSet + Send + Sync>,
-    texture: Arc<ImmutableImage<R8G8B8A8Unorm>>,
+    // Probably must be kept alive, TODO: Check!!!
+    #[allow(unused)] texture: Arc<ImmutableImage<R8G8B8A8Unorm>>,
 }
 
 impl Texture {
@@ -159,38 +158,32 @@ impl Texture {
         data: &[u8],
         width: u32,
         height: u32,
-        device: &Arc<Device>,
-        family: Option<QueueFamily>,
         sampler: &Arc<Sampler>,
         uniforms: &Arc<CpuAccessibleBuffer<vs::ty::Data>>,
         pipeline: &Pipeline,
-    ) -> Texture {
-        let texture = ImmutableImage::new(
-            device.clone(),
+        queue: &Arc<Queue>,
+    ) -> (
+        Texture,
+        CommandBufferExecFuture<NowFuture, AutoCommandBuffer>,
+    ) {
+        let (texture, future) = ImmutableImage::from_iter(
+            data.iter().cloned(),
             Dimensions::Dim2d { width, height },
             R8G8B8A8Unorm,
-            family,
+            queue.clone(),
         ).unwrap();
 
-        let buffer = CpuAccessibleBuffer::from_iter(
-            device.clone(),
-            BufferUsage::all(),
-            family,
-            data.iter().cloned(),
-        ).expect("failed to create texture buffer");
+        let set = Arc::new(
+            PersistentDescriptorSet::start(pipeline.clone(), 0)
+                .add_buffer(uniforms.clone())
+                .unwrap()
+                .add_sampler(sampler.clone())
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
 
-        let set = {
-            let builder = SimpleDescriptorSetBuilder::new(pipeline.clone(), 0);
-            let builder = uniforms.clone().add_me(builder, "constants");
-            let builder = (texture.clone(), sampler.clone()).add_me(builder, "sTexture");
-            builder.build()
-        };
-
-        Texture {
-            buffer,
-            set: Arc::new(set),
-            texture,
-        }
+        (Texture { set, texture }, future)
     }
 }
 
@@ -216,6 +209,7 @@ pub struct Renderer {
     dimensions: [u32; 2],
     frame_buffers: Vec<Arc<CustomFrameBuffer>>,
     fs: Arc<fs::Shader>,
+    futures: Vec<CommandBufferExecFuture<NowFuture, AutoCommandBuffer>>,
     pipeline: Pipeline,
     queue: Arc<Queue>,
     render_pass: Arc<RenderPass<CustomRenderPassDesc>>,
@@ -257,19 +251,19 @@ impl Renderer {
             vertex_count.unwrap_or(512 * 1024),
             index_count.unwrap_or(128 * 1024),
             &device,
-            Some(queue.family()),
         );
 
-        let vs = Arc::new(vs::Shader::load(&device).expect(
-            "failed to load vertex shader",
-        ));
-        let fs = Arc::new(fs::Shader::load(&device).expect(
-            "failed to load fragment shader",
-        ));
+        let vs = Arc::new(
+            vs::Shader::load(device.clone()).expect("failed to load vertex shader"),
+        );
+        let fs = Arc::new(
+            fs::Shader::load(device.clone()).expect("failed to load fragment shader"),
+        );
 
         let render_pass = Arc::new(
-            CustomRenderPassDesc { color: (swapchain.format(), 1) }
-                .build_render_pass(device.clone())
+            CustomRenderPassDesc {
+                color: (swapchain.format(), 1),
+            }.build_render_pass(device.clone())
                 .unwrap(),
         );
 
@@ -285,6 +279,7 @@ impl Renderer {
             dimensions,
             frame_buffers,
             fs: fs.clone(),
+            futures: vec![],
             pipeline,
             queue,
             render_pass,
@@ -303,16 +298,18 @@ impl Renderer {
     /// b - 1 byte
     /// a - 1 byte
     pub fn add_texture(&mut self, data: &[u8], width: u32, height: u32) -> NkHandle {
-        self.textures.push(Texture::new(
+        let (texture, future) = Texture::new(
             data,
             width,
             height,
-            &self.device,
-            Some(self.queue.family()),
             &self.sampler,
             &self.buffers.uniform_buffer,
             &self.pipeline,
-        ));
+            &self.queue,
+        );
+
+        self.futures.push(future);
+        self.textures.push(texture);
 
         NkHandle::from_id(self.textures.len() as i32 - 1)
     }
@@ -338,18 +335,11 @@ impl Renderer {
     /// Returns an `AutoCommandBufferBuilder` that is filled with commands that
     /// must be executed before actually drawing anything.
     /// These commands copy all the image data to their corresponding textures.
-    pub fn initial_commands(&self) -> Result<AutoCommandBufferBuilder> {
-        let mut command_buffer =
-            AutoCommandBufferBuilder::new(self.device.clone(), self.queue.family())?;
-
-        for texture in &self.textures {
-            command_buffer = command_buffer.copy_buffer_to_image(
-                texture.buffer.clone(),
-                texture.texture.clone(),
-            )?;
-        }
-
-        Ok(command_buffer)
+    pub fn initial_commands(&mut self) -> Box<GpuFuture> {
+        self.futures.drain(..).fold(
+            Box::new(vulkano::sync::now(self.device.clone())),
+            |old_future, future| Box::new(old_future.join(future)),
+        )
     }
 
     /// Initializes some fields of `NkConvertConfig`.
@@ -383,9 +373,8 @@ impl Renderer {
 
             end = start + cmd.elem_count();
 
-            let texture = self.find_texture(cmd.texture().id().unwrap()).ok_or(
-                Error::TextureNotFound,
-            )?;
+            let texture = self.find_texture(cmd.texture().id().unwrap())
+                .ok_or(Error::TextureNotFound)?;
 
             let &NkRect { x, y, w, h } = cmd.clip_rect();
 
@@ -402,16 +391,17 @@ impl Renderer {
 
             let slice = self.buffers.index_buffer_slice.clone();
 
-            command_buffer = command_buffer
-                .draw_indexed(self.pipeline.clone(),
-                              DynamicState {
-                                  scissors: Some(vec![scissor]),
-                                  ..Default::default()
-                              },
-                              self.buffers.vertex_buffer.clone(),
-                              slice.slice(start as usize..end as usize).unwrap(),
-                              texture.set.clone(),
-                              ())?;
+            command_buffer = command_buffer.draw_indexed(
+                self.pipeline.clone(),
+                DynamicState {
+                    scissors: Some(vec![scissor]),
+                    ..Default::default()
+                },
+                self.buffers.vertex_buffer.clone(),
+                slice.slice(start as usize..end as usize).unwrap(),
+                texture.set.clone(),
+                (),
+            )?;
 
             start = end;
         }
@@ -527,33 +517,31 @@ impl Renderer {
     fn get_vle() -> NkDrawVertexLayoutElements {
         use NkDrawVertexLayoutAttribute::{NK_VERTEX_ATTRIBUTE_COUNT, NK_VERTEX_COLOR,
                                           NK_VERTEX_POSITION, NK_VERTEX_TEXCOORD};
-        use NkDrawVertexLayoutFormat::{NK_FORMAT_COUNT, NK_FORMAT_FLOAT,
-                                       NK_FORMAT_R32G32B32A32_FLOAT};
+        use NkDrawVertexLayoutFormat::{NK_FORMAT_R32G32B32A32_FLOAT, NK_FORMAT_COUNT,
+                                       NK_FORMAT_FLOAT};
 
-        NkDrawVertexLayoutElements::new(
-            &[
-                (
-                    NK_VERTEX_POSITION,
-                    NK_FORMAT_FLOAT,
-                    Renderer::get_shader_offset("pos"),
-                ),
-                (
-                    NK_VERTEX_TEXCOORD,
-                    NK_FORMAT_FLOAT,
-                    Renderer::get_shader_offset("uv"),
-                ),
-                (
-                    NK_VERTEX_COLOR,
-                    NK_FORMAT_R32G32B32A32_FLOAT,
-                    Renderer::get_shader_offset("color"),
-                ),
-                (
-                    NK_VERTEX_ATTRIBUTE_COUNT,
-                    NK_FORMAT_COUNT,
-                    Renderer::get_shader_offset("_count"),
-                ),
-            ],
-        )
+        NkDrawVertexLayoutElements::new(&[
+            (
+                NK_VERTEX_POSITION,
+                NK_FORMAT_FLOAT,
+                Renderer::get_shader_offset("pos"),
+            ),
+            (
+                NK_VERTEX_TEXCOORD,
+                NK_FORMAT_FLOAT,
+                Renderer::get_shader_offset("uv"),
+            ),
+            (
+                NK_VERTEX_COLOR,
+                NK_FORMAT_R32G32B32A32_FLOAT,
+                Renderer::get_shader_offset("color"),
+            ),
+            (
+                NK_VERTEX_ATTRIBUTE_COUNT,
+                NK_FORMAT_COUNT,
+                Renderer::get_shader_offset("_count"),
+            ),
+        ])
     }
 }
 

@@ -24,15 +24,15 @@ unsafe impl RenderPassDesc for CustomRenderPassDesc {
     fn attachment_desc(&self, id: usize) -> Option<LayoutAttachmentDescription> {
         if id == 0 {
             Some(LayoutAttachmentDescription {
-                     format: self.color.0,
-                     samples: self.color.1,
-                     load: LoadOp::Clear,
-                     store: StoreOp::Store,
-                     stencil_load: LoadOp::Clear,
-                     stencil_store: StoreOp::Store,
-                     initial_layout: ImageLayout::Undefined,
-                     final_layout: ImageLayout::ColorAttachmentOptimal,
-                 })
+                format: self.color.0,
+                samples: self.color.1,
+                load: LoadOp::Clear,
+                store: StoreOp::Store,
+                stencil_load: LoadOp::Clear,
+                stencil_store: StoreOp::Store,
+                initial_layout: ImageLayout::Undefined,
+                final_layout: ImageLayout::ColorAttachmentOptimal,
+            })
         } else {
             unreachable!();
         }
@@ -45,12 +45,12 @@ unsafe impl RenderPassDesc for CustomRenderPassDesc {
     fn subpass_desc(&self, id: usize) -> Option<LayoutPassDescription> {
         if id == 0 {
             Some(LayoutPassDescription {
-                     color_attachments: vec![(0, ImageLayout::ColorAttachmentOptimal)],
-                     depth_stencil: None,
-                     input_attachments: vec![],
-                     resolve_attachments: vec![],
-                     preserve_attachments: vec![],
-                 })
+                color_attachments: vec![(0, ImageLayout::ColorAttachmentOptimal)],
+                depth_stencil: None,
+                input_attachments: vec![],
+                resolve_attachments: vec![],
+                preserve_attachments: vec![],
+            })
         } else {
             unreachable!();
         }
