@@ -365,8 +365,9 @@ impl Renderer {
         let mut end;
 
         {
-            let mut data = self.buffers.uniform_buffer.write().unwrap();
-            data.scale = [2f32 / self.dimensions[0] as f32, 2f32 / self.dimensions[1] as f32];
+            if let Ok(mut data) = self.buffers.uniform_buffer.write() {
+                data.scale = [2f32 / self.dimensions[0] as f32, 2f32 / self.dimensions[1] as f32];
+            }
         }
 
         for cmd in ctx.draw_command_iterator(nk_cmd_buffer) {
