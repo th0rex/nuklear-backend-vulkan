@@ -146,8 +146,6 @@ impl Buffers {
 /// image and a `set` that has the `texture` and some uniform data bound.
 struct Texture {
     set: Arc<DescriptorSet + Send + Sync>,
-    // Probably must be kept alive, TODO: Check!!!
-    #[allow(unused)] texture: Arc<ImmutableImage<R8G8B8A8Unorm>>,
 }
 
 impl Texture {
@@ -183,7 +181,7 @@ impl Texture {
                 .unwrap(),
         );
 
-        (Texture { set, texture }, future)
+        (Texture { set }, future)
     }
 }
 
