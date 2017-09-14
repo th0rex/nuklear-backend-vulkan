@@ -177,7 +177,7 @@ impl Texture {
             PersistentDescriptorSet::start(pipeline.clone(), 0)
                 .add_buffer(uniforms.clone())
                 .unwrap()
-                .add_sampler(sampler.clone())
+                .add_sampled_image(texture.clone(), sampler.clone())
                 .unwrap()
                 .build()
                 .unwrap(),
