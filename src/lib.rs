@@ -366,6 +366,11 @@ impl Renderer {
         let mut start = 0;
         let mut end;
 
+        {
+            let mut data = self.buffers.uniform_buffer.write().unwrap();
+            data.scale = [2f32 / self.dimensions[0] as f32, 2f32 / self.dimensions[1] as f32];
+        }
+
         for cmd in ctx.draw_command_iterator(nk_cmd_buffer) {
             if cmd.elem_count() < 1 {
                 continue;
@@ -426,9 +431,6 @@ impl Renderer {
         );
         self.frame_buffers = Renderer::create_frame_buffers(&images, &self.render_pass);
         self.swapchain = swapchain.clone();
-
-        let mut data = self.buffers.uniform_buffer.write().unwrap();
-        data.scale = [2f32 / dimensions[0] as f32, 2f32 / dimensions[1] as f32];
 
         Ok(swapchain)
     }
